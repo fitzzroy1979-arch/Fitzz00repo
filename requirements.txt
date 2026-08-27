@@ -1,0 +1,13 @@
+# 00fitzz.py dependencies.
+#
+# The backtest, trade-stub, `--research` (Perplexity), and the default
+# `--learn-provider hermes` (Together) path use only the Python standard library
+# (they talk to the HTTP APIs over urllib). The `anthropic` SDK is needed only
+# for `--learn-provider claude`.
+#
+# --research and `--learn-provider perplexity` require PERPLEXITY_API_KEY
+# (get one at perplexity.ai/settings/api).
+anthropic>=0.40
+
+# sweep_significance.py (parameter-sweep significance testing) needs numpy.
+numpy>=1.24
