@@ -612,12 +612,20 @@ def _call_claude(model, system, user):
         client = anthropic.Anthropic()
         resp = client.messages.create(
             model=model,
-            max_tokens=2048,  # room for adaptive thinking + the small JSON answer
+            # Claude Opus 5 (the default) runs adaptive thinking on by default, and
+            # those thinking tokens share this budget with the answer. Keep it roomy
+            # so a longer chain of thought can't truncate the small JSON that follows.
+            max_tokens=8000,
             system=system,
             messages=[{"role": "user", "content": user}],
         )
     except Exception as e:  # SDK/network/auth errors -> a clean message
         raise LearnError(f"Anthropic API call failed: {e}")
+    if getattr(resp, "stop_reason", None) == "max_tokens":
+        raise LearnError(
+            "Anthropic response hit the max_tokens cap before finishing (thinking "
+            "likely consumed the budget). Retry, or raise max_tokens in _call_claude."
+        )
     return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
 
 
