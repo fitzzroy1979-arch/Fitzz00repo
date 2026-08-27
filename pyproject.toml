@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fitzz"
+version = "0.1.0"
+description = "Combined TradingView-data-backed quant toolkit: trading CLI + sweep-significance analysis."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    # The trading tool's core is stdlib-only; anthropic is needed only for the
+    # `--learn-provider claude` path. The sweep tool needs numpy.
+    "anthropic>=0.40",
+    "numpy>=1.24",
+]
+
+[project.scripts]
+fitzz = "fitzz.cli:main"
+
+[tool.setuptools]
+packages = ["fitzz"]

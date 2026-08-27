@@ -40,3 +40,6 @@ Thumbs.db
 
 # --- Cloned third-party bridge (its own git repo; track separately if needed) ---
 tradingview-mcp/
+
+# --- Claude Code machine-local settings (agents/ are shared and tracked) ---
+.claude/settings.local.json
