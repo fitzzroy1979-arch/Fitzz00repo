@@ -5,6 +5,7 @@
 # --- Secrets / env ---
 .env
 .env.*
+!.env.example
 *.key
 secrets.json
 
@@ -43,3 +44,5 @@ tradingview-mcp/
 
 # --- Claude Code machine-local settings (agents/ are shared and tracked) ---
 .claude/settings.local.json
+!.env.example
+!.env.example

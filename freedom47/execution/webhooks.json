@@ -1,0 +1,12 @@
+{
+  "watchlist-brief": {
+    "directive": "directives/scheduled_watchlist_run.md",
+    "tools": ["run_directive", "send_email"],
+    "auth": "WEBHOOK_SECRET"
+  },
+  "discover": {
+    "directive": "directives/discover_projects.md",
+    "tools": ["run_directive", "send_email"],
+    "auth": "WEBHOOK_SECRET"
+  }
+}
