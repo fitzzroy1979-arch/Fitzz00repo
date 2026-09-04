@@ -84,11 +84,12 @@ This log is the continuous memory of the project across sessions and across AI e
 - The Yahoo-form watchlist (`XRP-USD`) is kept in `.env` and normalised at the edge, so the documented commands still work against a TradingView feed.
 - `timeout` is not available on this Mac (no coreutils); use plain invocation.
 
-**Files touched:** `freedom47/.env` (new, gitignored), `freedom47/execution/_common.py` (new), `freedom47/execution/fetch_prices.py` (new), this log. `execution/README.md` deliberately **not** updated — its status table is what is in question.
+**Files touched:** `freedom47/.env` (new, gitignored), `freedom47/execution/_common.py` (new), `freedom47/execution/fetch_prices.py` (new), this log. `freedom47/execution/README.md` (rewritten against the real source).
 
 **Open items:**
-- [ ] **User decision needed:** rewrite the migration map against the real source, or treat the missing rows as a feature backlog to build. Nothing past `fetch_prices.py` should be extracted until this is settled.
-- [ ] **User decision needed:** ratify or reject the import-instead-of-copy call for the bridge.
+- [x] **Resolved:** the migration map was rewritten against the real source (`execution/README.md`). 16 rows now cite real line numbers in `fitzz/trading.py`; the six sourceless rows moved to a clearly-marked Backlog section, so they are not lost but are not pretending to be migrations either. Three unresolved contradictions between the architecture docs and the source are recorded at the top of that file: two LLM paths not one, two watchlist sources of truth, and paper state living in `.00fitzz/` rather than `state/`.
+- [x] **Resolved:** import-instead-of-copy for the bridge is **ratified**, recorded as a named exception in the map's extraction rules.
+- [ ] Decide the three contradictions the rewritten map names (LLM paths, watchlist source, state location) — `get_watchlist.py` and `_futures_state.py` are blocked on the last two.
 - [x] Live-fetch test of `fetch_prices.py` — **passed** (see Done). Requires TradingView Desktop running with the debug port; `fetch_prices.py` exits 1 with the setup message when it is not.
 - [ ] **Commit the working-tree changes to `fitzz/trading.py`** (+170/-18: chart confirmation, stale-bar fingerprint, `ensure_history` paging, tempfile stdout). Untracked/uncommitted and everything in `execution/` now leans on it. Also uncommitted: `README.md`, `fitzz/__init__.py`, `fitzz/cli.py`, and untracked `fitzz/feed.py`.
 - [ ] (carried) `requirements.txt` — still unwritten; nothing extracted so far needs a third-party dep (stdlib only).
