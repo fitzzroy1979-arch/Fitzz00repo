@@ -60,6 +60,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -77,7 +78,15 @@ ORDER_LOG = SCRIPT_DIR / ".00fitzz" / "orders.log"
 FUTURES_STATE = SCRIPT_DIR / ".00fitzz" / "futures.json"
 FUTURES_CLOSED_LOG = SCRIPT_DIR / ".00fitzz" / "futures_closed.log"
 
-MAX_BARS = 500  # hard cap enforced by the tv bridge (see core/data.js)
+# Ceiling on a single ohlcv read. The tv bridge enforces its own cap in
+# core/data.js (MAX_OHLCV_BARS); keep the two in step. How much history is
+# actually reachable is a separate limit -- the chart lazy-loads ~300 bars
+# and only pages further back when asked, which is what ensure_history does.
+MAX_BARS = 5000
+
+# Starting cash for --backtest and --simulate when --starting-capital is not
+# given. Both modes read the same --starting-capital flag.
+DEFAULT_STARTING_CASH = 3000.0
 
 # --learn provider defaults. hermes -> Together's OpenAI-compatible endpoint;
 # claude -> the Anthropic API via the official SDK; perplexity -> Sonar over
@@ -137,8 +146,9 @@ class TradingViewBridge:
         self.node = node or os.environ.get("FITZZ_NODE") or shutil.which("node") or "node"
         self.settle = settle          # seconds to let a symbol/timeframe load
         self.verbose = verbose
+        self._last_bars = None        # previous read, to detect stale chart data
 
-    def _run(self, args):
+    def _run(self, args, timeout=60):
         if not self.cli.exists():
             raise BridgeError(
                 f"tv CLI not found at {self.cli}. Point --tv-repo at the "
@@ -147,15 +157,25 @@ class TradingViewBridge:
         cmd = [self.node, str(self.cli), *args]
         if self.verbose:
             print(f"  $ {' '.join(cmd)}", file=sys.stderr)
+        # Collect stdout in a real file rather than a pipe. The tv CLI prints its
+        # JSON with console.log and then calls process.exit(0) on the next line;
+        # node's stdout is asynchronous when it points at a pipe, so the exit
+        # truncates anything past the 64KB pipe buffer. A 500-bar ohlcv read is
+        # ~80KB, which came back as invalid JSON. Writes to a regular file are
+        # synchronous, so the payload always lands whole.
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            with tempfile.TemporaryFile("w+", encoding="utf-8") as fh:
+                proc = subprocess.run(cmd, stdout=fh, stderr=subprocess.PIPE,
+                                      text=True, timeout=timeout)
+                fh.seek(0)
+                stdout = fh.read()
         except FileNotFoundError:
             raise BridgeError(
                 f"Could not launch node ('{self.node}'). Set FITZZ_NODE to your "
                 f"node binary (nvm users: `which node` after sourcing nvm)."
             )
         except subprocess.TimeoutExpired:
-            raise BridgeError(f"tv {' '.join(args)} timed out after 60s.")
+            raise BridgeError(f"tv {' '.join(args)} timed out after {timeout}s.")
 
         # exit code 2 == connection failure in the tv CLI
         if proc.returncode == 2:
@@ -163,9 +183,9 @@ class TradingViewBridge:
                 "Can't reach TradingView Desktop. Launch it with the debug port "
                 "enabled (see tradingview-mcp/SETUP_GUIDE.md), then retry."
             )
-        out = proc.stdout.strip()
+        out = stdout.strip()
         if not out:
-            err = proc.stderr.strip() or f"exit {proc.returncode}"
+            err = (proc.stderr or "").strip() or f"exit {proc.returncode}"
             raise BridgeError(f"tv {' '.join(args)} produced no output: {err}")
         try:
             return json.loads(out)
@@ -188,29 +208,160 @@ class TradingViewBridge:
     def set_timeframe(self, tv_resolution):
         self._run(["timeframe", tv_resolution])
 
-    def get_ohlcv(self, count):
+    def get_chart_state(self):
+        """Current chart symbol + resolution, as the chart itself reports them."""
+        return self._run(["symbol"])
+
+    @staticmethod
+    def _ticker(symbol):
+        """Normalise a symbol for comparison.
+
+        The chart echoes back a fully-qualified symbol that rarely matches what
+        was asked for: 'TSX:NVDA' comes back as 'TSX_DLY:NVDA' (delayed feed),
+        and a bare 'BTCUSD' picks up whatever exchange prefix TradingView chose.
+        Comparing only the ticker after the exchange prefix is what makes the
+        confirmation reliable.
+        """
+        if not symbol:
+            return ""
+        return str(symbol).split(":")[-1].strip().upper()
+
+    def wait_for_chart(self, symbol, tv_resolution=None, timeout=None):
+        """Block until the chart actually shows `symbol` (and `tv_resolution`).
+
+        `tv symbol <X>` returns as soon as the command is accepted, not once the
+        chart has repainted, so reading bars straight after it can return the
+        *previous* symbol's data. Polling the chart's own reported state is the
+        only way to know the switch really landed.
+
+        Returns the confirmed symbol string, or raises BridgeError on timeout.
+        """
+        timeout = self.settle * 8 if timeout is None else timeout
+        want_sym = self._ticker(symbol)
+        deadline = time.time() + timeout
+        last_seen = None
+        while True:
+            try:
+                state = self.get_chart_state()
+                last_seen = state.get("symbol")
+                sym_ok = self._ticker(last_seen) == want_sym
+                res_ok = (tv_resolution is None
+                          or str(state.get("resolution")) == str(tv_resolution))
+                if sym_ok and res_ok:
+                    return last_seen
+            except BridgeError:
+                pass  # chart mid-load; keep polling until the deadline
+            if time.time() >= deadline:
+                raise BridgeError(
+                    f"Chart did not switch to {symbol} within {timeout:.0f}s "
+                    f"(still showing {last_seen!r}). Give TradingView longer to "
+                    f"warm up, or raise --settle."
+                )
+            time.sleep(min(0.25, self.settle))
+
+    @staticmethod
+    def _fingerprint(bars):
+        """Cheap identity for a bar series, used to detect a stale read."""
+        if not bars:
+            return None
+        first, last = bars[0], bars[-1]
+        return (len(bars), first.get("time"), first.get("close"),
+                last.get("time"), last.get("close"))
+
+    def get_ohlcv(self, count, stale_fingerprint=None):
+        """Read bars, retrying while the chart is still loading.
+
+        `stale_fingerprint` is the previous symbol's bar fingerprint. A read that
+        matches it means the chart hadn't repainted yet, so the bars belong to
+        the previous symbol -- retry rather than silently return another
+        symbol's data.
+        """
         count = min(count, MAX_BARS)
-        # The chart may still be loading right after a symbol/timeframe change.
         last_err = None
         for attempt in range(4):
             try:
                 data = self._run(["ohlcv", "-n", str(count)])
                 bars = data.get("bars", [])
                 if bars:
-                    return bars
-                last_err = "no bars returned"
+                    if (stale_fingerprint is not None
+                            and self._fingerprint(bars) == stale_fingerprint):
+                        last_err = "chart still showing the previous symbol's bars"
+                    else:
+                        return bars
+                else:
+                    last_err = "no bars returned"
             except BridgeError as e:
                 last_err = str(e)
             time.sleep(self.settle)
         raise BridgeError(f"Could not read OHLCV: {last_err}")
 
+    def ensure_history(self, count, tv_resolution):
+        """Page the chart back until it holds at least `count` bars.
+
+        TradingView lazy-loads roughly 300 bars per symbol and stops there, so a
+        request for more used to come back silently short -- `--days 500` on a
+        cold chart returned 300 daily bars and reported the truncated window as
+        though it were the one asked for. `tv range` drives requestMoreData
+        until the window is covered, which is the only way to reach the deeper
+        history the feed will serve.
+
+        Returns the number of bars now loaded, or None if the chart wouldn't say.
+        """
+        def depth():
+            try:
+                return self._run(["ohlcv", "-n", "1"]).get("total_available")
+            except BridgeError:
+                return None
+
+        have = depth()
+        if have is not None and have >= count:
+            return have
+
+        per_bar_secs = INTERVAL_MINUTES.get(tv_resolution, 1440) * 60
+        now = int(time.time())
+        # Ask for a calendar window wider than the raw bar count: crypto trades
+        # 24/7, but equities skip nights, weekends and holidays, so a bar never
+        # spans less wall-clock time than its interval and usually spans more.
+        frm = now - int(count * per_bar_secs * 1.6)
+        try:
+            # Paging back runs up to 25 round trips of ~1.8s inside the CLI, so
+            # this needs a far longer leash than a normal bridge call.
+            self._run(["range", "--from", str(frm), "--to", str(now)], timeout=300)
+        except BridgeError as e:
+            print(f"! could not extend chart history: {e}", file=sys.stderr)
+            return have
+        return depth()
+
     def load_bars(self, symbol, tv_resolution, count):
-        """Set symbol + timeframe, wait for the chart to settle, read bars."""
-        self.set_symbol(symbol)
-        time.sleep(self.settle)
-        self.set_timeframe(tv_resolution)
-        time.sleep(self.settle)
-        return self.get_ohlcv(count)
+        """Set symbol + timeframe, confirm the chart switched, then read bars.
+
+        The confirmation matters: without it a fast loop over a watchlist reads
+        the previous symbol's bars and reports identical results for unrelated
+        instruments.
+        """
+        stale = self._fingerprint(self._last_bars)
+        # A busy or still-warming chart can drop the first `symbol` command, so
+        # re-issue it before giving up -- the first symbol after a cold start is
+        # the usual victim.
+        last_err = None
+        for attempt in range(3):
+            self.set_symbol(symbol)
+            self.set_timeframe(tv_resolution)
+            try:
+                self.wait_for_chart(symbol, tv_resolution)
+                break
+            except BridgeError as e:
+                last_err = e
+        else:
+            raise last_err
+        self.ensure_history(count, tv_resolution)
+        bars = self.get_ohlcv(count, stale_fingerprint=stale)
+        if len(bars) < count:
+            print(f"! {symbol}: asked for {count} bars, the feed only has "
+                  f"{len(bars)}. Results cover the shorter window.",
+                  file=sys.stderr)
+        self._last_bars = bars
+        return bars
 
     def get_quote(self, symbol):
         try:
@@ -1444,8 +1595,9 @@ def build_parser():
     bt.add_argument("--symbol", help="Single symbol to backtest (instead of --watchlist).")
     bt.add_argument("--period", default="1y", help="Lookback, e.g. 1y, 6mo, 90d (default 1y).")
     bt.add_argument("--interval", default="1d", help="Bar interval, e.g. 1d, 4h, 1h (default 1d).")
-    bt.add_argument("--starting-capital", type=float, default=1000.0,
-                    help="Starting capital for the backtest (default 1000).")
+    bt.add_argument("--starting-capital", type=float, default=DEFAULT_STARTING_CASH,
+                    help="Starting capital for the backtest "
+                         f"(default {DEFAULT_STARTING_CASH:g}).")
     bt.add_argument("--fast", type=int, default=20, help="Fast SMA window (default 20).")
     bt.add_argument("--slow", type=int, default=50, help="Slow SMA window (default 50).")
     bt.add_argument("--stop-loss", type=float, default=0.0,
