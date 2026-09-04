@@ -237,6 +237,16 @@ def write_json(path, payload):
     return path
 
 
+def write_text(path, text):
+    """Write text to `path`, creating parent directories. Returns the path."""
+    path = Path(path)
+    if not path.is_absolute():
+        path = ROOT / path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
 def read_json(path):
     path = Path(path)
     if not path.is_absolute():

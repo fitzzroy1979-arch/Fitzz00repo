@@ -123,10 +123,43 @@ This log is the continuous memory of the project across sessions and across AI e
 
 **Open items:**
 - [ ] Decide the three contradictions the rewritten map names (LLM paths, watchlist source, state location) — `get_watchlist.py` and `_futures_state.py` are blocked on the last two.
-- [ ] Next rows: `render_backtest_report.py`, then `run_simulation.py`.
+- [x] `render_backtest_report.py` — done, see below. Next: `run_simulation.py`.
 - [ ] (carried) `requirements.txt` — still unwritten; everything extracted so far is stdlib only. The un-extracted `--learn` path needs the `anthropic` package.
 - [ ] (carried) `execution/notify.py` — new, email/sheet delivery.
 - [ ] (carried) Deploy a webhook to a real provider once `run_directive.py` chains work end to end.
 - [ ] (carried) Live/real exchange connection — still a separate future step, needs explicit user sign-off.
 
 **Next session should start by:** `render_backtest_report.py` (`print_result_row` L621, `print_backtest_summary` L633) turning a `run_backtest.py` payload into Markdown in `output/`. It needs no bridge and no tokens, so it is testable against the JSON already in `.tmp/`.
+
+---
+
+## 2026-09-04 — Claude (Claude Code, desktop) — Extracted `render_backtest_report.py`
+**Context going in:** Same session, continuing straight on from `run_backtest.py`.
+
+**Done:**
+- `execution/render_backtest_report.py` — reads a `run_backtest.py` payload and renders it. `--format text` reproduces the monolith's terminal table; `--format md` (default) writes a Markdown deliverable to `output/backtest_<interval>_<date>.md`. Computes nothing: every number comes from the input file.
+- `print_result_row` and `print_backtest_summary` copied verbatim; the Markdown renderer is new, which the map's own row sanctioned ("reformat to Markdown into `output/`").
+- Markdown table adds one derived column the terminal format lacks — `vs B&H` in percentage points — plus a summary block (average vs buy & hold, best, worst, how many beat buy & hold) and a footer noting no orders were placed.
+- `_common.write_text()` added alongside `write_json()`.
+
+**Decisions:**
+- Both formats kept rather than replacing the terminal one. `fitzz trade --backtest` still prints that table, so keeping it verbatim means the migrated path can be diffed against the monolith's output at any time.
+- Rows are sorted by return in the Markdown, unsorted in the text format — the text format is a verbatim copy and must stay that way to keep matching.
+
+**Broke / learned:**
+- Equivalence verified again, the same way as the backtest: captured stdout from both copies of `print_result_row` and `print_backtest_summary` over two real payloads plus an error row and an all-error list — byte-identical in every case.
+- Error paths: missing file exits 1; a JSON file with no `results` key exits 1 with a message naming the expected shape rather than a KeyError.
+- All-error payloads render a valid report with an Errors section and "No symbols produced results", not an empty document.
+- No API tokens spent. Nothing in this script touches the bridge, so it is testable entirely offline against the JSON in `.tmp/`.
+
+**Files touched:** `freedom47/execution/render_backtest_report.py` (new), `freedom47/execution/_common.py` (`write_text`), `freedom47/execution/README.md`, this log. First real deliverable written: `freedom47/output/backtest_4h_2026-09-04.md`.
+
+**Open items:**
+- [ ] Decide the three contradictions the rewritten map names (LLM paths, watchlist source, state location) — `get_watchlist.py` and `_futures_state.py` are blocked on the last two.
+- [ ] Next row: `run_simulation.py` (`simulate_strategy` L1179, `_sim_label` L1160), then `render_simulation_report.py`.
+- [ ] (carried) `requirements.txt` — everything extracted so far is stdlib only; the un-extracted `--learn` path needs `anthropic`.
+- [ ] (carried) `execution/notify.py` — new, email/sheet delivery.
+- [ ] (carried) Deploy a webhook to a real provider once `run_directive.py` chains work end to end.
+- [ ] (carried) Live/real exchange connection — separate future step, needs explicit user sign-off.
+
+**Next session should start by:** `run_simulation.py`. It is the biggest single function left (`simulate_strategy`, ~130 lines with the trailing stop, risk sizing, max-drawdown halt and per-trade blotter), so extract it verbatim and run the same side-by-side equivalence check against `fitzz.trading.simulate_strategy` before trusting it.

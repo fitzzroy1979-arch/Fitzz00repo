@@ -29,12 +29,12 @@ Three things the architecture docs get wrong about the real source, unresolved:
 | `_common.py` | `fmt_time` (L535); `MAX_BARS`, `DEFAULT_STARTING_CASH`, `INTERVAL_TO_TV`, `INTERVAL_MINUTES` (L85–133); `resolve_interval`, `period_to_bars`, `days_to_bars` (L377–414). Plus new: `.env` loader, workspace paths, Yahoo→TradingView symbol normalisation, `get_bridge()` | **done** |
 | `fetch_prices.py` | `TradingViewBridge.load_bars` / `ensure_history` / `get_ohlcv` (L142–376), via `_common.get_bridge()` | **done** |
 | `run_backtest.py` | `sma` (L416), `backtest_sma_cross` (L431), `_strategy_label` (L523), the symbol loop and `_is_proven` filter in `cmd_backtest` (L565–620). Verified bit-identical to the monolith across 5 parameter sets | **done** |
+| `render_backtest_report.py` | `print_result_row` (L621), `print_backtest_summary` (L633) kept verbatim as `--format text`; Markdown deliverable into `output/` is new. Computes nothing | **done** |
 
 ## To extract
 
 | Script | Pulls from `fitzz/trading.py` | Status |
 |---|---|---|
-| `render_backtest_report.py` | `print_result_row` (L621), `print_backtest_summary` (L633) — reformat to Markdown into `output/` | TODO |
 | `run_simulation.py` | `simulate_strategy` (L1179–1311), `_sim_label` (L1160), the loop in `cmd_simulate` (L1312). Adds trailing stop, risk %, max-drawdown halt, blotter | TODO |
 | `render_simulation_report.py` | `_print_sim` (L1351), `_print_sim_summary` (L1368) | TODO |
 | `llm_client.py` | `_call_claude` (L757), `_call_hermes` (L785), `_call_gemini` (L818), `_call_perplexity` (L851), `_extract_json` (L741). Shared by the two scripts below; reads `ANTHROPIC_MODEL` from `.env` | TODO |
