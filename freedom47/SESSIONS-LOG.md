@@ -62,3 +62,38 @@ This log is the continuous memory of the project across sessions and across AI e
 - [ ] Live/real exchange connection — still a separate future step, needs explicit user sign-off before any work starts.
 
 **Next session should start by:** asking the user for `00fitzz.py` (or locating it in the repo), then extracting `_common.py` and `fetch_prices.py` and testing `fetch_prices.py --symbol XRP-USD --interval 4h` before touching anything else. Surface test failures; don't auto-fix.
+
+---
+
+## 2026-09-04 — Claude (Claude Code, desktop) — Extracted `_common.py` + `fetch_prices.py`; found the migration map describes a different tool
+**Context going in:** Previous session built the 3-layer scaffold without access to the source file. This session unzipped `freedom47-3layer.zip` into the repo (`~/Desktop/AI`), symlinked `freedom47/fitzz -> ../fitzz` so the `00fitzz.py` shim runs in place, and committed/merged that to `main` (`0e49100`). Then started the extraction at the order given in `MIGRATION.md`.
+
+**Done:**
+- `.env` created from `.env.example`, `ANTHROPIC_MODEL=claude-fable-5-1` (gitignored, all key fields blank).
+- `execution/_common.py` — .env loader, workspace paths, `MAX_BARS` / `DEFAULT_STARTING_CASH` / `INTERVAL_TO_TV` / `INTERVAL_MINUTES` / `BARS_PER_YEAR`, `resolve_interval` / `period_to_bars` / `days_to_bars` (verbatim from `fitzz/trading.py`), `normalize_symbol`, `get_bridge`, `write_json` / `read_json`.
+- `execution/fetch_prices.py` — one symbol in, JSON bars out; `--period` / `--days` / `--bars` windows, `--out`, `--stdout`, non-zero exit on failure.
+- Tested: both compile; `--help` clean; helpers return correct values (4h→240, 1y@4h→2190 bars, 90d@4h→540, XRP-USD→XRPUSD); bridge-down path exits 1 with the setup message, bad interval exits 2. Then TradingView Desktop was launched with `--remote-debugging-port=9222` and the live fetch **passed**: all four watchlist symbols returned real, distinct data (XRPUSD 1.4502 / HBARUSD 0.07916 / XLMUSD 0.184601 / ZAMAUSD 0.05247 at the same last bar), uniform 14400s spacing, monotonic timestamps, OHLC invariants hold. The documented acceptance command (`--symbol XRP-USD --interval 4h`, defaulting to 1y) returned 2190/2190 bars in 19.7s, so the chart's lazy-load paging via `ensure_history` reaches a full year. No API tokens spent.
+
+**Decisions:**
+- `fetch_prices.py` reads TradingView through the `tv` bridge, not yfinance — that is what the code actually does (see below).
+- `_common.get_bridge()` **imports** `TradingViewBridge` from the `fitzz` package instead of copying it, deviating from the "move code, don't rewrite it" rule. The bridge is 243 lines and `fitzz trade` still uses it, so a second copy would drift. **Correction to an earlier claim in this entry's first draft:** commit `2b76754` was cited as a bridge fix; it is not — it is the Claude `--learn` max_tokens fix and never touched the bridge. The real and much stronger reason is under Broke/learned. Flagged to the user, not yet ratified.
+
+**Broke / learned:**
+- **The migration map in `execution/README.md` describes a tool that does not exist in this repo.** The previous session wrote it from description, without the source. Verified against `fitzz/trading.py` (1700 lines): zero occurrences of yfinance, youtube, fact-check, streamlit, discover, or resample. What actually exists: `TradingViewBridge` (subprocess to the `tv` CLI over Chrome DevTools :9222), **one** strategy `backtest_sma_cross` plus `simulate_strategy` — not seven, a **futures** paper portfolio in `.00fitzz/futures.json` (`cmd_futures_trade` / `_portfolio` / `_close`) — not a spot portfolio, and `cmd_research` on **Perplexity Sonar** — not a Claude call. `cmd_learn` (four LLM providers) has no row in the map at all. So `fetch_analyst_views.py`, `fetch_youtube_metadata.py`, `fact_check_claims.py`, `scan_launch_platforms.py`, `score_project_credibility.py` and `dashboard.py` have no source to extract from — they would be new features, not migrations.
+- **The bridge capabilities this all depends on are uncommitted.** `git show HEAD:fitzz/trading.py` has *none* of `get_chart_state`, `wait_for_chart`, `_fingerprint`, `ensure_history`, or the tempfile stdout read — they exist only in the working tree (`git diff HEAD -- fitzz/trading.py` = +170/-18). So the chart-confirmation that made the four symbols return distinct series, and the `ensure_history` paging that reached 2190 bars, are all work-in-progress that is not in git. Committed HEAD would have failed both tests. Anything importing or copying the bridge inherits that exposure until the change is committed.
+- The Yahoo-form watchlist (`XRP-USD`) is kept in `.env` and normalised at the edge, so the documented commands still work against a TradingView feed.
+- `timeout` is not available on this Mac (no coreutils); use plain invocation.
+
+**Files touched:** `freedom47/.env` (new, gitignored), `freedom47/execution/_common.py` (new), `freedom47/execution/fetch_prices.py` (new), this log. `execution/README.md` deliberately **not** updated — its status table is what is in question.
+
+**Open items:**
+- [ ] **User decision needed:** rewrite the migration map against the real source, or treat the missing rows as a feature backlog to build. Nothing past `fetch_prices.py` should be extracted until this is settled.
+- [ ] **User decision needed:** ratify or reject the import-instead-of-copy call for the bridge.
+- [x] Live-fetch test of `fetch_prices.py` — **passed** (see Done). Requires TradingView Desktop running with the debug port; `fetch_prices.py` exits 1 with the setup message when it is not.
+- [ ] **Commit the working-tree changes to `fitzz/trading.py`** (+170/-18: chart confirmation, stale-bar fingerprint, `ensure_history` paging, tempfile stdout). Untracked/uncommitted and everything in `execution/` now leans on it. Also uncommitted: `README.md`, `fitzz/__init__.py`, `fitzz/cli.py`, and untracked `fitzz/feed.py`.
+- [ ] (carried) `requirements.txt` — still unwritten; nothing extracted so far needs a third-party dep (stdlib only).
+- [ ] (carried) `execution/notify.py` — new, email/sheet delivery.
+- [ ] (carried) Deploy a webhook to a real provider once `run_directive.py` chains work end to end.
+- [ ] (carried) Live/real exchange connection — still a separate future step, needs explicit user sign-off.
+
+**Next session should start by:** getting the two decisions above from the user. Then, if the map is being rewritten, do it before extracting anything else — `run_backtest.py` is the next real row and it depends on which strategy set is authoritative.
