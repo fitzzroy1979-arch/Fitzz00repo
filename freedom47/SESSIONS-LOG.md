@@ -98,3 +98,35 @@ This log is the continuous memory of the project across sessions and across AI e
 - [ ] (carried) Live/real exchange connection — still a separate future step, needs explicit user sign-off.
 
 **Next session should start by:** getting the two decisions above from the user. Then, if the map is being rewritten, do it before extracting anything else — `run_backtest.py` is the next real row and it depends on which strategy set is authoritative.
+
+---
+
+## 2026-09-04 — Claude (Claude Code, desktop) — Extracted `run_backtest.py`; verified bit-identical to the monolith
+**Context going in:** Same session as the entry above, continued after the map rewrite. TradingView Desktop running on :9222 throughout.
+
+**Done:**
+- `execution/run_backtest.py` — `sma`, `backtest_sma_cross`, `_strategy_label`, `_is_proven` copied verbatim from `fitzz/trading.py`. Takes prices from `--prices FILE` (repeatable, from `fetch_prices.py`) or fetches for `--symbol` / `--watchlist` / `--env-watchlist`. Writes a JSON payload (`ran_at`, `starting_capital`, `strategy`, `results[]`); no table printing — that is `render_backtest_report.py`'s job.
+- `fmt_time` moved into `_common.py` (shared by backtest, simulation and the renderers) and imported by name so the copied function bodies stay byte-identical.
+- `execution/README.md` — `run_backtest.py` moved to the Extracted section; `_common.py` row now cites `fmt_time` (L535).
+
+**Decisions:**
+- Pure strategy functions are **copied** verbatim, as the extraction rule says. The import exception stays scoped to the bridge alone: `sma`/`backtest_sma_cross` are self-contained and stable, unlike the bridge.
+- `run_backtest.py` emits JSON only. Rendering is a separate row, so the same metrics can feed a report, a webhook or the dashboard without re-running the maths.
+
+**Broke / learned:**
+- **Equivalence verified, not assumed.** Ran the copied `backtest_sma_cross` and the monolith's side by side on the same 2190 bars across 5 parameter sets (plain 20/50; 5/200 + trend100; 10/30 + sl5 + tp15; 3/5 + sl2.5 + trend200; 50/51) and the short-series error path — all six outputs compared equal as whole dicts. If either copy is edited later, re-run that comparison before trusting it.
+- Own bug, found and fixed during testing: the default `--out` name used `--interval` (default `1d`) even when the bars came from a 4h file, so a 4h backtest was landing in `backtest_1d.json`. Now derives the tag from the interval the bars actually carry.
+- Error paths: no args exits 2, unreadable price file exits 1, bad interval exits 2.
+- Live end-to-end (`--symbol XRP-USD --interval 1d --period 6mo`) fetched and backtested in one command, 180 bars. No API tokens spent — nothing here calls an LLM.
+
+**Files touched:** `freedom47/execution/run_backtest.py` (new), `freedom47/execution/_common.py` (added `fmt_time`, `datetime` import), `freedom47/execution/README.md`, this log.
+
+**Open items:**
+- [ ] Decide the three contradictions the rewritten map names (LLM paths, watchlist source, state location) — `get_watchlist.py` and `_futures_state.py` are blocked on the last two.
+- [ ] Next rows: `render_backtest_report.py`, then `run_simulation.py`.
+- [ ] (carried) `requirements.txt` — still unwritten; everything extracted so far is stdlib only. The un-extracted `--learn` path needs the `anthropic` package.
+- [ ] (carried) `execution/notify.py` — new, email/sheet delivery.
+- [ ] (carried) Deploy a webhook to a real provider once `run_directive.py` chains work end to end.
+- [ ] (carried) Live/real exchange connection — still a separate future step, needs explicit user sign-off.
+
+**Next session should start by:** `render_backtest_report.py` (`print_result_row` L621, `print_backtest_summary` L633) turning a `run_backtest.py` payload into Markdown in `output/`. It needs no bridge and no tokens, so it is testable against the JSON already in `.tmp/`.

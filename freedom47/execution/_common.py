@@ -8,6 +8,7 @@ TradingView bridge that supplies price data.
 Nothing here makes an LLM call or writes a deliverable; it is import-only.
 """
 
+import datetime as dt
 import json
 import os
 import sys
@@ -154,6 +155,19 @@ def days_to_bars(days, tv_resolution):
     per_bar = INTERVAL_MINUTES.get(tv_resolution, 1440)
     bars = max(2, int(days * 1440 / per_bar))
     return min(bars, MAX_BARS), bars
+
+
+def fmt_time(t):
+    """Bar timestamp -> 'YYYY-MM-DD'. Moved verbatim from fitzz/trading.py."""
+    if t is None:
+        return None
+    try:
+        t = float(t)
+        if t > 1e12:      # milliseconds
+            t /= 1000.0
+        return dt.datetime.fromtimestamp(t).strftime("%Y-%m-%d")
+    except (ValueError, OSError, OverflowError):
+        return str(t)
 
 
 # --------------------------------------------------------------------------- #
