@@ -119,7 +119,9 @@ BARS_PER_YEAR = {
 
 
 # --------------------------------------------------------------------------- #
-# Period / interval helpers -- moved verbatim from fitzz/trading.py
+# Period / interval helpers + shared maths -- moved verbatim from
+# fitzz/trading.py. `sma` lives here because both run_backtest.py and
+# run_simulation.py use it.
 # --------------------------------------------------------------------------- #
 
 def resolve_interval(interval):
@@ -168,6 +170,21 @@ def fmt_time(t):
         return dt.datetime.fromtimestamp(t).strftime("%Y-%m-%d")
     except (ValueError, OSError, OverflowError):
         return str(t)
+
+
+def sma(values, window):
+    """Simple moving average; None until enough data is present."""
+    out = [None] * len(values)
+    if window <= 0:
+        return out
+    run = 0.0
+    for i, v in enumerate(values):
+        run += v
+        if i >= window:
+            run -= values[i - window]
+        if i >= window - 1:
+            out[i] = run / window
+    return out
 
 
 # --------------------------------------------------------------------------- #

@@ -156,10 +156,41 @@ This log is the continuous memory of the project across sessions and across AI e
 
 **Open items:**
 - [ ] Decide the three contradictions the rewritten map names (LLM paths, watchlist source, state location) — `get_watchlist.py` and `_futures_state.py` are blocked on the last two.
-- [ ] Next row: `run_simulation.py` (`simulate_strategy` L1179, `_sim_label` L1160), then `render_simulation_report.py`.
+- [x] `run_simulation.py` — done, see below. Next: `render_simulation_report.py`.
 - [ ] (carried) `requirements.txt` — everything extracted so far is stdlib only; the un-extracted `--learn` path needs `anthropic`.
 - [ ] (carried) `execution/notify.py` — new, email/sheet delivery.
 - [ ] (carried) Deploy a webhook to a real provider once `run_directive.py` chains work end to end.
 - [ ] (carried) Live/real exchange connection — separate future step, needs explicit user sign-off.
 
 **Next session should start by:** `run_simulation.py`. It is the biggest single function left (`simulate_strategy`, ~130 lines with the trailing stop, risk sizing, max-drawdown halt and per-trade blotter), so extract it verbatim and run the same side-by-side equivalence check against `fitzz.trading.simulate_strategy` before trusting it.
+
+---
+
+## 2026-09-04 — Claude (Claude Code, desktop) — Extracted `run_simulation.py`
+**Context going in:** Same session, third extraction in a row.
+
+**Done:**
+- `execution/run_simulation.py` — `simulate_strategy` (~130 lines) and `_sim_label` copied verbatim. Same price-source options as `run_backtest.py` (`--prices` / `--symbol` / `--watchlist` / `--env-watchlist`), windowed by `--days` rather than `--period` as the monolith does. Emits JSON with `halted` and the per-trade `blotter[]`.
+- `sma` moved from `run_backtest.py` into `_common.py` — two consumers now, and the map says shared helpers live there. Imported by name in both so the copied function bodies stay byte-identical.
+
+**Decisions:**
+- Simulation stays a separate script from backtest rather than a flag on it. They are different models: the backtest is all-in with optional stop/target, the simulation adds trailing stops, fractional sizing off the tightest stop, and a portfolio-level circuit breaker. Folding them together would have meant rewriting both, which the extraction rule forbids.
+
+**Broke / learned:**
+- Equivalence verified across 6 parameter sets — bare defaults; trailing stop alone; hard + trailing + risk sizing; max-drawdown breaker (confirmed `halted: true`); everything at once including trend filter; and a deliberately tight 1% trailing stop to force many exits — plus the short-series error path. All compared equal as whole dicts, so the blotter matches trade for trade, not just the summary numbers.
+- **Regression checked:** after moving `sma`, re-ran the `run_backtest.py` equivalence cases against the monolith. Still identical.
+- Risk sizing behaves as documented: `--risk-pct 2` against a 5% tightest stop sized every entry at 40% of cash, visible in the blotter's `size_pct`.
+- Exit-reason mix on 2190 4h XRP bars with full controls: 29 cross-down, 5 trailing-stop, 5 stop-loss, 1 end-of-series — all four exit branches exercised by real data.
+- Error paths: no args exits 2, unreadable file exits 1, bad interval exits 2. No API tokens spent.
+
+**Files touched:** `freedom47/execution/run_simulation.py` (new), `freedom47/execution/run_backtest.py` (`sma` removed, imported), `freedom47/execution/_common.py` (`sma` added), `freedom47/execution/README.md`, this log.
+
+**Open items:**
+- [ ] Decide the three contradictions the rewritten map names (LLM paths, watchlist source, state location) — `get_watchlist.py` and `_futures_state.py` are blocked on the last two.
+- [ ] Next row: `render_simulation_report.py` (`_print_sim` L1351, `_print_sim_summary` L1368).
+- [ ] (carried) `requirements.txt` — everything extracted so far is stdlib only; the un-extracted `--learn` path needs `anthropic`.
+- [ ] (carried) `execution/notify.py` — new, email/sheet delivery.
+- [ ] (carried) Deploy a webhook to a real provider once `run_directive.py` chains work end to end.
+- [ ] (carried) Live/real exchange connection — separate future step, needs explicit user sign-off.
+
+**Next session should start by:** `render_simulation_report.py`, mirroring `render_backtest_report.py` — verbatim `_print_sim` / `_print_sim_summary` behind `--format text`, plus a Markdown deliverable that renders the blotter as a table. Testable offline against `.tmp/sim.json`.

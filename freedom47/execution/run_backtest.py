@@ -28,27 +28,12 @@ import json
 import sys
 
 import _common as C
-from _common import fmt_time  # noqa: F401  (used by the copied backtest below)
+from _common import fmt_time, sma  # noqa: F401  (used by the copied backtest below)
 
 
 # --------------------------------------------------------------------------- #
 # Strategy + backtest -- moved verbatim from fitzz/trading.py (L416-533)
 # --------------------------------------------------------------------------- #
-
-def sma(values, window):
-    """Simple moving average; None until enough data is present."""
-    out = [None] * len(values)
-    if window <= 0:
-        return out
-    run = 0.0
-    for i, v in enumerate(values):
-        run += v
-        if i >= window:
-            run -= values[i - window]
-        if i >= window - 1:
-            out[i] = run / window
-    return out
-
 
 def backtest_sma_cross(bars, starting_capital, fast=20, slow=50,
                        stop_loss_pct=0.0, take_profit_pct=0.0, trend_filter=0):
