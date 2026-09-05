@@ -48,6 +48,7 @@ Three things the architecture docs get wrong about the real source, unresolved:
 | `futures_trade.py` | position maths from `cmd_futures_trade` (L1444–1458), verified field-identical long and short. `y/N` + TTY refusal; `--entry-price` works offline | **done** |
 | `futures_portfolio.py` | `cmd_futures_portfolio` (L1475–1517). Read-only, no approval. Degrades to `mark n/a` and an unavailable total when the bridge is down | **done** |
 | `futures_close.py` | `cmd_futures_close` (L1519–1563). `y/N` + TTY refusal. Warns loudly when closing at entry price because no mark was available | **done** |
+| `fetch_btcc_prices.py` | — NEW, no monolith source. Snapshots BTCC's public `GET /api/futures` (no auth): marks, bid/ask, index, fees, funding. **Snapshot only, no OHLCV.** Flags `price_suspect` instruments | **done (new)** |
 
 ## To extract
 
@@ -61,6 +62,27 @@ Three things the architecture docs get wrong about the real source, unresolved:
 | `run_directive.py` | — | provided (skeleton) |
 | `webhook_server.py` | — | provided (skeleton) |
 | `webhooks.json` | — | provided |
+
+## BTCC market data (public, no account)
+
+`GET https://www.btcc.com/api/futures` — the endpoint BTCC's own trading page calls. No key, no
+cookie, no login. 177 perpetuals with `last`/`bid`/`ask`/`index`, `maker_fee`/`taker_fee`,
+`funding_rate`, price bounds, open interest and 24h volume. Wrapped by `fetch_btcc_prices.py`.
+
+Two limits that decide what it can be used for:
+
+- **Snapshot only.** No OHLCV, so it cannot feed `run_backtest.py` or `run_simulation.py`.
+  TradingView via `fetch_prices.py` remains the only source of bars.
+- **Roughly half the instruments quote zero.** 85 of 177 report `last`/`bid`/`ask`/`index` as
+  exactly 0 while `enabled` with real open interest and volume — PONSUSDT does it on $153M of
+  24h volume. `XRPUSDT`, `XLMUSDT` and `HBARUSDT` quote fine; `ZAMAUSDT` does not.
+  `fetch_btcc_prices.py` sets `price_suspect: true` on these and warns; never consume a
+  flagged quote.
+
+Fee and funding **units are unconfirmed** — `taker_fee: 0.01` may be 0.01% or 1%. Values are
+passed through as received. Confirm against BTCC's published schedule before any PnL use.
+
+There is no evidence of a BTCC *demo* API; demo trading is a logged-in web feature.
 
 ## Backlog — described in the old map, no source to extract from
 

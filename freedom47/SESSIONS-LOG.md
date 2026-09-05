@@ -315,6 +315,7 @@ This log is the continuous memory of the project across sessions and across AI e
 
 **Open items:**
 - [ ] Confirm BTCC fee/funding units before using them in any PnL calculation.
+- [ ] **BTCC quotes zero on ~half its instruments** — see the entry below. Decide whether the endpoint is worth relying on beyond the majors.
 - [ ] User is checking BTCC's developer portal for whether demo accounts issue API keys.
 - [ ] **Still open:** watchlist has two sources of truth. `get_watchlist.py` blocked.
 - [ ] API keys still placeholders — `research_brief.py` / `tune_parameters.py` cannot run.
@@ -322,3 +323,34 @@ This log is the continuous memory of the project across sessions and across AI e
 - [ ] (carried) `requirements.txt`; webhook deployment; live exchange connection (needs explicit sign-off).
 
 **Next session should start by:** either the BTCC market-data source (a `fetch_btcc_prices.py` alongside `fetch_prices.py`, using the public endpoint — real prices, no account, feeding the existing paper tracker), or the remaining research/tuning rows once API keys exist.
+
+---
+
+## 2026-09-05 — Claude (Claude Code, desktop) — Built `fetch_btcc_prices.py`; found BTCC quotes zero on half its book
+**Context going in:** User asked for the BTCC price fetcher after the public endpoint turned up in the previous entry.
+
+**Done:**
+- `execution/fetch_btcc_prices.py` — wraps `GET https://www.btcc.com/api/futures`. One unauthenticated request; `--symbol` / `--symbols` / `--env-watchlist` / `--all`. Resolves loose symbols: `XRP`, `XRP-USD`, `XRPUSD` and `XRPUSDT` all map to `XRPUSDT`, so the `.env` watchlist works unchanged.
+- Payload records `source`, `authenticated: false`, `units: unconfirmed`, and a `snapshot_only` note, so a later consumer cannot mistake it for bars or trust the fee numbers by accident.
+
+**Decisions:**
+- Values are passed through **exactly as received**, never normalised. The fee and funding units are unknown and guessing at them would bake a 100x error into every PnL downstream.
+
+**Broke / learned:**
+- **85 of 177 instruments (48%) quote zero.** `last`/`bid`/`ask`/`index` are exactly 0 while the instrument is `enabled` and carries real open interest and 24h volume. `PONSUSDT` does it on $153M of 24h volume; `ZECXUSDT` on $151M; `JCTUSDT` on 2.9bn open interest. This is not an edge case, it is half the book. Added `is_price_suspect()` — flags the row, warns on stderr, sets `price_suspect_count` in the payload. Without it a consumer gets a division by zero or reads a phantom crash to nothing.
+- Of the watchlist: XRPUSDT, XLMUSDT and HBARUSDT quote correctly; **ZAMAUSDT is one of the zeroes** (138M open interest, $3.4M 24h volume, price band 0.05123–0.05237, quoted price 0).
+- The endpoint 403s a bare urllib request; it needs a browser-like User-Agent.
+- Error paths: unknown symbol warns and exits 1 when nothing resolves, but still returns the symbols that did; no selector exits 2.
+
+**Files touched:** `freedom47/execution/fetch_btcc_prices.py` (new), `execution/README.md` (new "BTCC market data" section), this log.
+
+**Open items:**
+- [ ] Confirm BTCC fee/funding units before any PnL use.
+- [ ] Decide whether BTCC is worth relying on beyond the majors, given half the book quotes zero.
+- [ ] User is checking BTCC's developer portal for demo-account API keys.
+- [ ] **Still open:** watchlist has two sources of truth. `get_watchlist.py` blocked.
+- [ ] API keys still placeholders — `research_brief.py` / `tune_parameters.py` cannot run.
+- [ ] Remaining rows: `research_brief.py`, `render_brief.py`, `tune_parameters.py`, `get_watchlist.py`, `notify.py`.
+- [ ] (carried) `requirements.txt`; webhook deployment; live exchange connection (needs explicit sign-off).
+
+**Next session should start by:** deciding the BTCC question above. If it stays, the natural next step is wiring `fetch_btcc_prices.py` as a mark-price fallback in `futures_portfolio.py` for when TradingView is down — but only for instruments that are not `price_suspect`.
