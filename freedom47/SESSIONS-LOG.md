@@ -347,6 +347,7 @@ This log is the continuous memory of the project across sessions and across AI e
 **Open items:**
 - [ ] Confirm BTCC fee/funding units before any PnL use.
 - [ ] Decide whether BTCC is worth relying on beyond the majors, given half the book quotes zero.
+- [ ] **Decide on the position-id collision** (see 2026-09-05 fallback entry) — inherited from the monolith, not fixed.
 - [ ] User is checking BTCC's developer portal for demo-account API keys.
 - [ ] **Still open:** watchlist has two sources of truth. `get_watchlist.py` blocked.
 - [ ] API keys still placeholders — `research_brief.py` / `tune_parameters.py` cannot run.
@@ -354,3 +355,34 @@ This log is the continuous memory of the project across sessions and across AI e
 - [ ] (carried) `requirements.txt`; webhook deployment; live exchange connection (needs explicit sign-off).
 
 **Next session should start by:** deciding the BTCC question above. If it stays, the natural next step is wiring `fetch_btcc_prices.py` as a mark-price fallback in `futures_portfolio.py` for when TradingView is down — but only for instruments that are not `price_suspect`.
+
+---
+
+## 2026-09-05 — Claude (Claude Code, desktop) — BTCC wired as mark fallback; found a position-id collision
+**Context going in:** User asked to wire `fetch_btcc_prices.py` into `futures_portfolio.py` as a fallback for when TradingView is down. TradingView was down throughout, which made it the real test case.
+
+**Done:**
+- `futures_portfolio.py` — TradingView first, BTCC second. One batched BTCC request covers every symbol still missing a mark. `price_suspect` instruments are skipped with a warning rather than used. `--no-fallback` disables it.
+- Every mark carries its origin: `[btcc]` in the table, `mark_source` in the JSON, plus `mark_sources` at payload level.
+
+**Decisions:**
+- **Marks are tagged, never blended silently.** BTCC quotes its own perpetual book; positions were priced at entry from TradingView. The basis between the two feeds lands directly in unrealised PnL, so a mixed portfolio prints a caveat calling those numbers indicative. Showing a confident total from two feeds would be the wrong kind of tidy.
+- `price_suspect` instruments are refused outright. A zero mark is worse than no mark: it produces a plausible-looking PnL that is entirely fiction.
+
+**Broke / learned:**
+- Tested with two seeded positions — XRPUSDT (BTCC quotes it) and ZAMAUSDT (BTCC quotes zero). XRPUSDT picked up a BTCC mark at 1.40448 tagged `[btcc]`; ZAMAUSDT was refused and printed `mark n/a`, and the portfolio total correctly reported unavailable rather than a partial sum. `--no-fallback` produced no marks at all. **Both seeded positions removed afterwards — `.00fitzz/futures.json` is back to empty.**
+- **Position ids collide.** `cmd_futures_trade` builds them as `"F" + %m%d%H%M%S + milliseconds`. Five positions built in a tight loop produced *one* id, five times. `futures_close.py --target <id>` selects by id, so a collision closes every position sharing it. Not reachable by hand — you cannot type two commands inside a millisecond — but reachable from any script or loop. **Not fixed:** changing the format would orphan ids already written to `.00fitzz/futures_closed.log`, and that is the user's call.
+
+**Files touched:** `freedom47/execution/futures_portfolio.py`, `execution/README.md`, this log.
+
+**Open items:**
+- [ ] **Decide on the position-id collision** — leave it, add a uniqueness check at write time, or change the format and migrate the log.
+- [ ] Confirm BTCC fee/funding units before any PnL use.
+- [ ] Decide whether BTCC is worth relying on beyond the majors.
+- [ ] User is checking BTCC's developer portal for demo-account API keys.
+- [ ] **Still open:** watchlist has two sources of truth. `get_watchlist.py` blocked.
+- [ ] API keys still placeholders — `research_brief.py` / `tune_parameters.py` cannot run.
+- [ ] Remaining rows: `research_brief.py`, `render_brief.py`, `tune_parameters.py`, `get_watchlist.py`, `notify.py`.
+- [ ] (carried) `requirements.txt`; webhook deployment; live exchange connection (needs explicit sign-off).
+
+**Next session should start by:** the id-collision decision, since it affects `futures_trade.py` and `futures_close.py` together. Then the remaining rows as keys and the watchlist question allow.

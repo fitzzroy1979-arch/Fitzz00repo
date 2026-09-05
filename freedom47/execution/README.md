@@ -46,7 +46,7 @@ Three things the architecture docs get wrong about the real source, unresolved:
 | `log_trade.py` | the `ORDER_LOG` append from `cmd_trade` (L678–680). Interactive `y/N`, no `--yes`, refuses when stdin is not a TTY. Still a stub that never places an order | **done** |
 | `_futures_state.py` | `_load_futures` / `_save_futures` (L1389–1402), `_mark_price` (L1403). State at `.00fitzz/futures.json` per decision 3. Import-only | **done** |
 | `futures_trade.py` | position maths from `cmd_futures_trade` (L1444–1458), verified field-identical long and short. `y/N` + TTY refusal; `--entry-price` works offline | **done** |
-| `futures_portfolio.py` | `cmd_futures_portfolio` (L1475–1517). Read-only, no approval. Degrades to `mark n/a` and an unavailable total when the bridge is down | **done** |
+| `futures_portfolio.py` | `cmd_futures_portfolio` (L1475–1517). Read-only, no approval. Falls back to BTCC's public marks when the bridge gives nothing, skipping `price_suspect` instruments; every mark tagged with its source. `--no-fallback` disables | **done** |
 | `futures_close.py` | `cmd_futures_close` (L1519–1563). `y/N` + TTY refusal. Warns loudly when closing at entry price because no mark was available | **done** |
 | `fetch_btcc_prices.py` | — NEW, no monolith source. Snapshots BTCC's public `GET /api/futures` (no auth): marks, bid/ask, index, fees, funding. **Snapshot only, no OHLCV.** Flags `price_suspect` instruments | **done (new)** |
 
@@ -83,6 +83,17 @@ Fee and funding **units are unconfirmed** — `taker_fee: 0.01` may be 0.01% or 
 passed through as received. Confirm against BTCC's published schedule before any PnL use.
 
 There is no evidence of a BTCC *demo* API; demo trading is a logged-in web feature.
+
+`futures_portfolio.py` uses this as a **mark fallback** when TradingView gives nothing. Marks are
+tagged `[btcc]` / `mark_source`, never blended silently: BTCC quotes its own perpetual book while
+positions were priced at entry from TradingView, so the basis between the feeds lands in
+unrealised PnL. Mixed marks are indicative, not exact.
+
+**Known defect, inherited, not fixed:** position ids are
+`"F" + %m%d%H%M%S + milliseconds`, so two positions opened in the same millisecond get the same
+id — five built in a tight loop produced one id, five times. `futures_close.py --target <id>`
+would then close all of them. Not reachable by hand at a terminal; reachable from a script. Left
+alone because changing the format would break ids already in `.00fitzz/futures_closed.log`.
 
 ## Backlog — described in the old map, no source to extract from
 
