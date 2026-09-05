@@ -187,10 +187,41 @@ This log is the continuous memory of the project across sessions and across AI e
 
 **Open items:**
 - [ ] Decide the three contradictions the rewritten map names (LLM paths, watchlist source, state location) — `get_watchlist.py` and `_futures_state.py` are blocked on the last two.
-- [ ] Next row: `render_simulation_report.py` (`_print_sim` L1351, `_print_sim_summary` L1368).
+- [x] `render_simulation_report.py` — done, see below.
 - [ ] (carried) `requirements.txt` — everything extracted so far is stdlib only; the un-extracted `--learn` path needs `anthropic`.
 - [ ] (carried) `execution/notify.py` — new, email/sheet delivery.
 - [ ] (carried) Deploy a webhook to a real provider once `run_directive.py` chains work end to end.
 - [ ] (carried) Live/real exchange connection — separate future step, needs explicit user sign-off.
 
 **Next session should start by:** `render_simulation_report.py`, mirroring `render_backtest_report.py` — verbatim `_print_sim` / `_print_sim_summary` behind `--format text`, plus a Markdown deliverable that renders the blotter as a table. Testable offline against `.tmp/sim.json`.
+
+---
+
+## 2026-09-04 — Claude (Claude Code, desktop) — Extracted `render_simulation_report.py`; dropped a test artifact
+**Context going in:** Same session, fourth extraction. User asked to drop the committed test report and continue.
+
+**Done:**
+- Removed `output/backtest_4h_2026-09-04.md` from version control and disk (commit `1e4ac0c`). `output/` is deliberately *not* gitignored — deliverables are tracked by design — but that file was an artifact of testing the renderer, not a report anyone asked for. Regenerate with `render_backtest_report.py --results .tmp/bt.json`.
+- `execution/render_simulation_report.py` — mirrors the backtest renderer. `_print_sim` / `_print_sim_summary` copied verbatim behind `--format text`; Markdown deliverable is new, adding a blotter table (entry, exit, size, P&L %, P&L cash, reason), an exit-reason breakdown across all symbols, and a Halted column.
+
+**Decisions:**
+- The text format reproduces the monolith's quirk that the blotter prints only for a single symbol; the Markdown always includes it, with `--no-blotter` to opt out on long runs. The quirk is preserved where it must be (verbatim copy) and fixed where the format is new.
+- Added an **exit-reason breakdown** to the Markdown — it is the simulation's own signal about which risk control is doing the work, and it is invisible in the terminal format.
+
+**Broke / learned:**
+- Equivalence verified six ways: `_print_sim` with and without the blotter, `_print_sim_summary`, an error row, an all-error summary, and the HALTED banner. Byte-identical in every case.
+- Circuit breaker exercised end to end: a deliberately tight `--max-drawdown-pct 8` on 2190 4h XRP bars halted after 2 trades, and the report renders the banner, the **yes** in the Halted column, the plain-English explanation, and a final blotter row with reason `max-drawdown`.
+- Exit-reason mix across the 4-symbol run: cross-down 44%, trailing-stop 33%, end 17%, stop-loss 6%.
+- Error paths: missing file exits 1, wrong-shaped JSON exits 1 with a message naming the expected payload. No API tokens spent; nothing here touches the bridge.
+
+**Files touched:** `freedom47/execution/render_simulation_report.py` (new), `freedom47/execution/README.md`, this log. Deleted: `freedom47/output/backtest_4h_2026-09-04.md`.
+
+**Open items:**
+- [ ] Decide the three contradictions the rewritten map names (LLM paths, watchlist source, state location) — `get_watchlist.py` and `_futures_state.py` are blocked on the last two.
+- [ ] Next rows: the paper-trading group (`propose_trade.py`, `log_trade.py`, the three `futures_*.py`) — all bridge-dependent but token-free. Then `llm_client.py` and the two token-spending scripts, which need user sign-off before any test run.
+- [ ] (carried) `requirements.txt` — everything extracted so far is stdlib only; the un-extracted `--learn` path needs `anthropic`.
+- [ ] (carried) `execution/notify.py` — new, email/sheet delivery.
+- [ ] (carried) Deploy a webhook to a real provider once `run_directive.py` chains work end to end.
+- [ ] (carried) Live/real exchange connection — separate future step, needs explicit user sign-off.
+
+**Next session should start by:** the paper-trading group. `propose_trade.py` (`check_trade_window` L551 + the `get_quote` lookup) computes only and writes nothing; `log_trade.py` does the `ORDER_LOG` append and must stay a stub that never places an order. Note the approval rule: any paper trade needs explicit per-invocation approval, never stored, never defaulted, never reachable from a webhook.

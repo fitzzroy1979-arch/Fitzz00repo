@@ -31,12 +31,12 @@ Three things the architecture docs get wrong about the real source, unresolved:
 | `run_backtest.py` | `sma` (L416), `backtest_sma_cross` (L431), `_strategy_label` (L523), the symbol loop and `_is_proven` filter in `cmd_backtest` (L565–620). Verified bit-identical to the monolith across 5 parameter sets | **done** |
 | `render_backtest_report.py` | `print_result_row` (L621), `print_backtest_summary` (L633) kept verbatim as `--format text`; Markdown deliverable into `output/` is new. Computes nothing | **done** |
 | `run_simulation.py` | `simulate_strategy` (L1179–1311), `_sim_label` (L1160), the loop in `cmd_simulate` (L1312). Trailing stop, risk sizing, max-drawdown halt, blotter. Verified bit-identical to the monolith across 6 parameter sets | **done** |
+| `render_simulation_report.py` | `_print_sim` (L1351), `_print_sim_summary` (L1368) kept verbatim as `--format text`; Markdown deliverable with blotter table and exit-reason breakdown is new. Computes nothing | **done** |
 
 ## To extract
 
 | Script | Pulls from `fitzz/trading.py` | Status |
 |---|---|---|
-| `render_simulation_report.py` | `_print_sim` (L1351), `_print_sim_summary` (L1368) | TODO |
 | `llm_client.py` | `_call_claude` (L757), `_call_hermes` (L785), `_call_gemini` (L818), `_call_perplexity` (L851), `_extract_json` (L741). Shared by the two scripts below; reads `ANTHROPIC_MODEL` from `.env` | TODO |
 | `research_brief.py` | `RESEARCH_SYSTEM` (L1044), `_price_context` (L1064), `_research_user_prompt` (L1089), `_research_symbol` (L1101), `cmd_research` (L1109). **Spends tokens** (Perplexity Sonar) | TODO |
 | `render_brief.py` | `_print_research` (L1139) — Markdown + sources list into `output/` | TODO |
