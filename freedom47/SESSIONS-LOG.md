@@ -30,6 +30,8 @@ This log is the continuous memory of the project across sessions and across AI e
 - Paper trading: crypto only, $3,000 starting cash, fee 0.10%, slippage 5 bps, **explicit approval required on every trade** — never stored, never via webhook/scheduler.
 - User preferences: when tests reveal problems, surface them and let the user decide — don't auto-fix silently. Don't create/overwrite directives without asking. Check with the user before re-running anything that costs tokens.
 - Source rules live in `directives/source_credibility.md`; priority YouTube channels `@AlexanderELorenzo`, `@24hrsCrypto`; Investopedia is reference-only.
+- **Paper state stays in `.00fitzz/`** (`futures.json`, `orders.log`) at the repo root, not the architecture's `state/`. Decided 2026-09-04 so the monolith and the extracted scripts read one portfolio, not two.
+- **Paper-trade approval is an interactive `y/N` prompt**, never stored, never defaulted, never reachable from a webhook; refused when stdin is not a TTY. Decided 2026-09-04.
 
 ---
 
@@ -225,3 +227,35 @@ This log is the continuous memory of the project across sessions and across AI e
 - [ ] (carried) Live/real exchange connection — separate future step, needs explicit user sign-off.
 
 **Next session should start by:** the paper-trading group. `propose_trade.py` (`check_trade_window` L551 + the `get_quote` lookup) computes only and writes nothing; `log_trade.py` does the `ORDER_LOG` append and must stay a stub that never places an order. Note the approval rule: any paper trade needs explicit per-invocation approval, never stored, never defaulted, never reachable from a webhook.
+
+---
+
+## 2026-09-04 — Claude (Claude Code, desktop) — Extracted `llm_client.py`; two standing decisions taken
+**Context going in:** Same session, fifth extraction. User resolved two of the three open contradictions and asked for `llm_client.py` next.
+
+**Done:**
+- **Decisions recorded** (also added to Standing facts): paper state stays in `.00fitzz/`; paper-trade approval is an interactive `y/N` prompt. Both written into `execution/README.md` — contradiction 3 is closed, contradiction 2 (watchlist source) is still open.
+- `execution/llm_client.py` — `_call_claude`, `_call_hermes`, `_call_gemini`, `_call_perplexity`, `_extract_json`, the three endpoint constants and the model-default tables, all copied verbatim. Adds a `call()` dispatcher, `configured()`, and a `--check` CLI.
+
+**Decisions:**
+- The module is **import-only in practice**: importing costs nothing, only `call()` spends. `--check` exists so configuration can be verified for free rather than by firing a request and reading the error.
+- `default_model("claude")` reads `ANTHROPIC_MODEL` from `.env`, so it resolves to **`claude-fable-5-1`** where the monolith hardcodes `claude-opus-5`. This is a deliberate divergence — CLAUDE.md requires Fable 5.1 and "a model swap is a one-line change". The other three providers keep their monolith defaults, none of which `.env` currently overrides.
+
+**Broke / learned:**
+- Verbatim verified the strongest way yet: `inspect.getsource` compared the monolith's and the copy's function bodies directly — all five identical, plus the endpoint URLs and both model tables.
+- All four providers fail fast with their own message and open no socket when the key is absent; an unknown provider name is caught before any dispatch.
+- **No API keys are set on this machine.** `--check` reports `usable now: none`. The `anthropic` SDK *is* installed. So `research_brief.py` and `tune_parameters.py` can be written and unit-tested, but cannot be run end to end until keys exist — and running them needs the user's go-ahead regardless, since both spend tokens.
+- No tokens spent this session. Nothing in `llm_client.py` was called except `_extract_json` (pure string parsing) and the no-key error paths.
+
+**Files touched:** `freedom47/execution/llm_client.py` (new), `freedom47/execution/README.md`, this log.
+
+**Open items:**
+- [ ] **Still open:** the watchlist has two sources of truth (`.env WATCHLIST` vs TradingView's panel). Scripts expose both behind `--watchlist` / `--env-watchlist`; `get_watchlist.py` stays blocked.
+- [ ] Next rows: the paper-trading group — `propose_trade.py` (compute only), `log_trade.py` (`y/N` prompt, stays a stub), then `_futures_state.py` + the three `futures_*.py`.
+- [ ] `research_brief.py` and `tune_parameters.py` — writable now, but need API keys *and* explicit user go-ahead before any live run.
+- [ ] (carried) `requirements.txt` — everything extracted is stdlib only; `llm_client.py`'s claude path needs `anthropic`, which is installed but unrecorded.
+- [ ] (carried) `execution/notify.py` — new, email/sheet delivery.
+- [ ] (carried) Deploy a webhook to a real provider once `run_directive.py` chains work end to end.
+- [ ] (carried) Live/real exchange connection — separate future step, needs explicit user sign-off.
+
+**Next session should start by:** `propose_trade.py` and `log_trade.py`. Approval rule is now concrete: interactive `y/N`, refuse when stdin is not a TTY, never a stored flag. `log_trade.py` appends to `.00fitzz/orders.log` and must stay a stub that never places a real order.

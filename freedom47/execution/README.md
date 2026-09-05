@@ -18,9 +18,18 @@ Three things the architecture docs get wrong about the real source, unresolved:
    Gemini, Perplexity). `--learn` has no counterpart in the architecture at all.
 2. **The watchlist has two sources of truth.** `WATCHLIST` in `.env` (Yahoo form, `XRP-USD`) and
    `bridge.get_watchlist()`, which reads TradingView's own watchlist panel. `--watchlist` uses the
-   latter; `_common.watchlist()` reads the former.
-3. **Paper state does not live in `state/`.** The futures portfolio is at
-   `.00fitzz/futures.json` and the order log at `.00fitzz/orders.log`, both at the repo root.
+   latter; `_common.watchlist()` reads the former. Still unresolved — scripts expose both behind
+   `--watchlist` / `--env-watchlist` so neither is chosen silently.
+
+**Resolved 2026-09-04 (user decision):**
+
+3. ~~Paper state does not live in `state/`.~~ **Paper state stays in `.00fitzz/`** —
+   `futures.json` and `orders.log` at the repo root, where `fitzz trade` already reads them.
+   The architecture's `state/` directory goes unused for now; one portfolio, one location,
+   and the monolith and the extracted scripts cannot drift apart.
+4. **Paper-trade approval is an interactive `y/N` prompt.** Never stored, never defaulted, never
+   reachable from a webhook. A script that writes a trade must refuse to proceed when stdin is not
+   a TTY rather than assuming yes.
 
 ## Extracted
 
@@ -32,12 +41,12 @@ Three things the architecture docs get wrong about the real source, unresolved:
 | `render_backtest_report.py` | `print_result_row` (L621), `print_backtest_summary` (L633) kept verbatim as `--format text`; Markdown deliverable into `output/` is new. Computes nothing | **done** |
 | `run_simulation.py` | `simulate_strategy` (L1179–1311), `_sim_label` (L1160), the loop in `cmd_simulate` (L1312). Trailing stop, risk sizing, max-drawdown halt, blotter. Verified bit-identical to the monolith across 6 parameter sets | **done** |
 | `render_simulation_report.py` | `_print_sim` (L1351), `_print_sim_summary` (L1368) kept verbatim as `--format text`; Markdown deliverable with blotter table and exit-reason breakdown is new. Computes nothing | **done** |
+| `llm_client.py` | `_call_claude` (L757), `_call_hermes` (L785), `_call_gemini` (L818), `_call_perplexity` (L851), `_extract_json` (L741), endpoints + model defaults (L95–107). All five verified source-identical via `inspect.getsource`. `--check` reports configuration without calling | **done** |
 
 ## To extract
 
 | Script | Pulls from `fitzz/trading.py` | Status |
 |---|---|---|
-| `llm_client.py` | `_call_claude` (L757), `_call_hermes` (L785), `_call_gemini` (L818), `_call_perplexity` (L851), `_extract_json` (L741). Shared by the two scripts below; reads `ANTHROPIC_MODEL` from `.env` | TODO |
 | `research_brief.py` | `RESEARCH_SYSTEM` (L1044), `_price_context` (L1064), `_research_user_prompt` (L1089), `_research_symbol` (L1101), `cmd_research` (L1109). **Spends tokens** (Perplexity Sonar) | TODO |
 | `render_brief.py` | `_print_research` (L1139) — Markdown + sources list into `output/` | TODO |
 | `tune_parameters.py` | `cmd_learn` (L967), `LEARN_SYSTEM` (L703), `_learn_user_prompt` (L721), `llm_propose` (L917), `_clamp_params` (L895), `_tune_symbol` (L936), `_print_best` (L1015), `_print_learn_row` (L1022). **Spends tokens.** Not in the old map at all | TODO |
@@ -46,7 +55,7 @@ Three things the architecture docs get wrong about the real source, unresolved:
 | `futures_trade.py` | `cmd_futures_trade` (L1420), `_mark_price` (L1403) | TODO |
 | `futures_portfolio.py` | `cmd_futures_portfolio` (L1475) | TODO |
 | `futures_close.py` | `cmd_futures_close` (L1519) | TODO |
-| `_futures_state.py` | `_load_futures` / `_save_futures` (L1389–1402). Decide first whether state moves from `.00fitzz/futures.json` to `state/` | TODO |
+| `_futures_state.py` | `_load_futures` / `_save_futures` (L1389–1402). State stays at `.00fitzz/futures.json` per decision 3 | TODO |
 | `get_watchlist.py` | `TradingViewBridge.get_watchlist` (L197). Resolve the two-sources problem above first | TODO |
 | `notify.py` | — | NEW, no source |
 | `run_directive.py` | — | provided (skeleton) |
@@ -84,7 +93,10 @@ would fork a file still under repair. Any script needing price data or a quote g
 `_common.get_bridge()` — do not paste the bridge into a script.
 
 **Anything that spends tokens gets checked with the user before it runs.** That is
-`research_brief.py` and `tune_parameters.py`.
+`research_brief.py` and `tune_parameters.py`, both via `llm_client.py`. Importing `llm_client`
+costs nothing; only `call()` does. `python execution/llm_client.py --check` reports which
+providers are configured without making a request.
 
-**Paper trades need explicit approval on every invocation** — never stored, never defaulted, never
-reachable from a webhook.
+**Paper trades need explicit approval on every invocation** — an interactive `y/N` prompt per
+decision 4. Never stored, never defaulted, never reachable from a webhook, and refused outright
+when stdin is not a TTY.
