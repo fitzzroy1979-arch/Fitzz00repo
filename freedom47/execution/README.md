@@ -42,6 +42,8 @@ Three things the architecture docs get wrong about the real source, unresolved:
 | `run_simulation.py` | `simulate_strategy` (L1179–1311), `_sim_label` (L1160), the loop in `cmd_simulate` (L1312). Trailing stop, risk sizing, max-drawdown halt, blotter. Verified bit-identical to the monolith across 6 parameter sets | **done** |
 | `render_simulation_report.py` | `_print_sim` (L1351), `_print_sim_summary` (L1368) kept verbatim as `--format text`; Markdown deliverable with blotter table and exit-reason breakdown is new. Computes nothing | **done** |
 | `llm_client.py` | `_call_claude` (L757), `_call_hermes` (L785), `_call_gemini` (L818), `_call_perplexity` (L851), `_extract_json` (L741), endpoints + model defaults (L95–107). All five verified source-identical via `inspect.getsource`. `--check` reports configuration without calling | **done** |
+| `propose_trade.py` | `check_trade_window` (L551, source-identical) + the `get_quote` price lookup and order dict from `cmd_trade` (L649). Computes only; exits 3 when the window is shut | **done** |
+| `log_trade.py` | the `ORDER_LOG` append from `cmd_trade` (L678–680). Interactive `y/N`, no `--yes`, refuses when stdin is not a TTY. Still a stub that never places an order | **done** |
 
 ## To extract
 
@@ -50,8 +52,6 @@ Three things the architecture docs get wrong about the real source, unresolved:
 | `research_brief.py` | `RESEARCH_SYSTEM` (L1044), `_price_context` (L1064), `_research_user_prompt` (L1089), `_research_symbol` (L1101), `cmd_research` (L1109). **Spends tokens** (Perplexity Sonar) | TODO |
 | `render_brief.py` | `_print_research` (L1139) — Markdown + sources list into `output/` | TODO |
 | `tune_parameters.py` | `cmd_learn` (L967), `LEARN_SYSTEM` (L703), `_learn_user_prompt` (L721), `llm_propose` (L917), `_clamp_params` (L895), `_tune_symbol` (L936), `_print_best` (L1015), `_print_learn_row` (L1022). **Spends tokens.** Not in the old map at all | TODO |
-| `propose_trade.py` | `check_trade_window` (L551) + `bridge.get_quote` price lookup from `cmd_trade` (L649) — compute only, write nothing | TODO |
-| `log_trade.py` | the `ORDER_LOG` append from `cmd_trade` (L649–698). Currently a **stub** that never places an order; keep it that way | TODO |
 | `futures_trade.py` | `cmd_futures_trade` (L1420), `_mark_price` (L1403) | TODO |
 | `futures_portfolio.py` | `cmd_futures_portfolio` (L1475) | TODO |
 | `futures_close.py` | `cmd_futures_close` (L1519) | TODO |

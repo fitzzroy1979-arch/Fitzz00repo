@@ -251,7 +251,7 @@ This log is the continuous memory of the project across sessions and across AI e
 
 **Open items:**
 - [ ] **Still open:** the watchlist has two sources of truth (`.env WATCHLIST` vs TradingView's panel). Scripts expose both behind `--watchlist` / `--env-watchlist`; `get_watchlist.py` stays blocked.
-- [ ] Next rows: the paper-trading group — `propose_trade.py` (compute only), `log_trade.py` (`y/N` prompt, stays a stub), then `_futures_state.py` + the three `futures_*.py`.
+- [x] `propose_trade.py` and `log_trade.py` — done, see below. Next: `_futures_state.py` + the three `futures_*.py`.
 - [ ] `research_brief.py` and `tune_parameters.py` — writable now, but need API keys *and* explicit user go-ahead before any live run.
 - [ ] (carried) `requirements.txt` — everything extracted is stdlib only; `llm_client.py`'s claude path needs `anthropic`, which is installed but unrecorded.
 - [ ] (carried) `execution/notify.py` — new, email/sheet delivery.
@@ -259,3 +259,32 @@ This log is the continuous memory of the project across sessions and across AI e
 - [ ] (carried) Live/real exchange connection — separate future step, needs explicit user sign-off.
 
 **Next session should start by:** `propose_trade.py` and `log_trade.py`. Approval rule is now concrete: interactive `y/N`, refuse when stdin is not a TTY, never a stored flag. `log_trade.py` appends to `.00fitzz/orders.log` and must stay a stub that never places a real order.
+
+---
+
+## 2026-09-04 — Claude (Claude Code, desktop) — Extracted `propose_trade.py` + `log_trade.py`; API keys are still placeholders
+**Context going in:** Same session, sixth extraction. User's two decisions from the previous entry now implemented.
+
+**Done:**
+- `execution/propose_trade.py` — `check_trade_window` copied verbatim (source-identical), plus the `get_quote` price lookup and order dict from `cmd_trade`. Computes and writes a proposal to `.tmp/`; logs nothing. Exits **3** when the window is shut so a caller can tell "gated" from "broken".
+- `execution/log_trade.py` — the only script that writes a trade. Interactive `y/N`, deliberately **no `--yes` flag**, nothing remembered between runs, and an outright refusal when stdin is not a TTY. That TTY check is the mechanism that keeps paper trades unreachable from webhooks, cron and directive chains: they have no terminal, so they cannot answer, so nothing is written. Still a stub — appends intent to `.00fitzz/orders.log` and stops.
+- `_common.py` — added `ORDER_LOG` / `FUTURES_STATE` / `FUTURES_CLOSED_LOG` under `.00fitzz/` per the state decision, plus `check_state_paths()`, which asserts our paths still resolve to the same files the monolith uses. All three agree today; if the monolith ever moves them, this catches it instead of letting two portfolios diverge.
+
+**Decisions:**
+- No `--yes` flag at all. CLAUDE.md permits one; the user chose the prompt, and a flag is the thing an automation would eventually pass. Leaving it out means there is no way to approve a trade except by typing at a terminal.
+
+**Broke / learned:**
+- Live proposal against the bridge: BUY 50 of XRPUSD @ 1.3965 = 35.8037952 units, priced and written to `.tmp/` with nothing logged.
+- **Safety verified by observation, not assertion:** ran `log_trade.py` with stdin closed; it refused, exited 1, and `.00fitzz/orders.log` still has its original 2 lines. `--dry-run` also wrote nothing. No trade was approved or logged this session.
+- Window gate exercised at all four corners: open window, current hour inside, current hour outside (refused, exit 3), and `--ignore-trade-window` bypass.
+- **API keys: none exist on this machine.** `~/.zshrc` has exactly two key lines, `GEMINI_API_KEY` and `PERPLEXITY_API_KEY`, and both still hold their literal `PASTE_…` placeholder text. No Anthropic or Together key is defined anywhere. The lines are syntactically fine — they just have not been filled in. Obtaining keys means signing up on each provider's site, which the user must do; the agent cannot create accounts or handle credentials.
+
+**Files touched:** `freedom47/execution/propose_trade.py` (new), `freedom47/execution/log_trade.py` (new), `freedom47/execution/_common.py` (state paths + `check_state_paths`), `freedom47/execution/README.md`, this log.
+
+**Open items:**
+- [ ] **User action, blocks two rows:** paste real API keys. Gemini (free, no card) https://aistudio.google.com/apikey ; Perplexity https://www.perplexity.ai/settings/api ; Anthropic https://console.anthropic.com . `research_brief.py` needs Perplexity; `tune_parameters.py` needs any one. Verify for free afterwards with `python execution/llm_client.py --check`.
+- [ ] **Still open:** watchlist has two sources of truth. `get_watchlist.py` blocked.
+- [ ] Next rows: `_futures_state.py` + `futures_trade.py` / `futures_portfolio.py` / `futures_close.py`.
+- [ ] (carried) `requirements.txt`; `execution/notify.py`; webhook deployment; live exchange connection (needs explicit sign-off).
+
+**Next session should start by:** `_futures_state.py` (`_load_futures` / `_save_futures`, now pointing at `.00fitzz/futures.json` via `_common`), then the three futures commands. `futures_trade.py` opens a position and so falls under the approval rule — same `y/N` + TTY refusal as `log_trade.py`.

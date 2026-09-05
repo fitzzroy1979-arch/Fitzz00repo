@@ -30,6 +30,15 @@ ENV_FILE = ROOT / ".env"
 # inside freedom47/ or from the repo root.
 PACKAGE_PARENT = ROOT
 
+# Paper-trading state. Decided 2026-09-04: this stays in `.00fitzz/` at the repo
+# root rather than moving to `state/`, so `fitzz trade` and the extracted scripts
+# read one portfolio instead of drifting into two. See execution/README.md.
+# `check_state_paths()` asserts these still agree with the monolith's.
+LEGACY_STATE = ROOT.parent / ".00fitzz"
+ORDER_LOG = LEGACY_STATE / "orders.log"
+FUTURES_STATE = LEGACY_STATE / "futures.json"
+FUTURES_CLOSED_LOG = LEGACY_STATE / "futures_closed.log"
+
 
 # --------------------------------------------------------------------------- #
 # Environment
@@ -230,6 +239,26 @@ def get_bridge(tv_repo=None, settle=1.5, verbose=False):
         )
     return TradingViewBridge(repo=tv_repo or DEFAULT_TV_REPO,
                              settle=settle, verbose=verbose)
+
+
+def check_state_paths():
+    """Assert our paper-state paths match the monolith's. Returns a diff list.
+
+    The whole point of keeping state in `.00fitzz/` is that both code paths read
+    the same files. If the monolith ever moves them, this catches it instead of
+    letting two portfolios quietly diverge.
+    """
+    if str(PACKAGE_PARENT) not in sys.path:
+        sys.path.insert(0, str(PACKAGE_PARENT))
+    from fitzz import trading as T
+    mismatches = []
+    for name, ours in (("ORDER_LOG", ORDER_LOG),
+                       ("FUTURES_STATE", FUTURES_STATE),
+                       ("FUTURES_CLOSED_LOG", FUTURES_CLOSED_LOG)):
+        theirs = getattr(T, name)
+        if Path(ours).resolve() != Path(theirs).resolve():
+            mismatches.append(f"{name}: ours {ours} != monolith {theirs}")
+    return mismatches
 
 
 def bridge_error():
