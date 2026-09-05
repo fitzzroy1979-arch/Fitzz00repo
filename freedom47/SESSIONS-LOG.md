@@ -284,7 +284,41 @@ This log is the continuous memory of the project across sessions and across AI e
 **Open items:**
 - [ ] **User action, blocks two rows:** paste real API keys. Gemini (free, no card) https://aistudio.google.com/apikey ; Perplexity https://www.perplexity.ai/settings/api ; Anthropic https://console.anthropic.com . `research_brief.py` needs Perplexity; `tune_parameters.py` needs any one. Verify for free afterwards with `python execution/llm_client.py --check`.
 - [ ] **Still open:** watchlist has two sources of truth. `get_watchlist.py` blocked.
-- [ ] Next rows: `_futures_state.py` + `futures_trade.py` / `futures_portfolio.py` / `futures_close.py`.
+- [x] The futures group — done, see below.
 - [ ] (carried) `requirements.txt`; `execution/notify.py`; webhook deployment; live exchange connection (needs explicit sign-off).
 
 **Next session should start by:** `_futures_state.py` (`_load_futures` / `_save_futures`, now pointing at `.00fitzz/futures.json` via `_common`), then the three futures commands. `futures_trade.py` opens a position and so falls under the approval rule — same `y/N` + TTY refusal as `log_trade.py`.
+
+---
+
+## 2026-09-05 — Claude (Claude Code, desktop) — Futures group extracted; found BTCC's public market-data endpoint
+**Context going in:** Same session. TradingView Desktop had quit, so the whole group was built and tested offline.
+
+**Done:**
+- `execution/_futures_state.py` — `_load_futures` / `_save_futures` / `_mark_price` verbatim, pointed at `.00fitzz/` via `_common`. Plus shared `unrealized()`, `past_liquidation()`, `log_closed()`. Import-only.
+- `execution/futures_trade.py` — opens a position. `y/N` + TTY refusal (same gate as `log_trade.py`); `--entry-price` opens offline.
+- `execution/futures_portfolio.py` — read-only, no approval. `--offline` skips the bridge.
+- `execution/futures_close.py` — `y/N` + TTY refusal, `--target id|symbol` or `--all`.
+
+**Decisions:**
+- **Closing is gated too, not just opening.** The approval rule says "any paper trade"; closing rewrites the portfolio and books a realised number, so it takes the same `y/N`.
+- **The entry-price fallback is now loud.** The monolith silently closes at entry price when no mark is available, realising exactly $0. That is a real number written to the log and it is not the one the market would have given. `futures_close.py` prints a warning inside the approval block, so the user sees it before typing y.
+
+**Broke / learned:**
+- Position maths verified field-by-field against `cmd_futures_trade` for long 5x and short 20x — `notional`, `quantity`, `entry_price`, `liq_price`, `margin`, `mode` all identical (`id` and `opened_at` excluded, being timestamp-derived). Short liquidation sits above entry, as it should.
+- **Safety verified by observation:** both writing scripts run with stdin closed refuse and exit 1. A seeded test position was used to exercise portfolio and close, then **removed — `.00fitzz/futures.json` is back to `{"positions": []}` as found.** No position was opened or closed for real.
+- **BTCC has a public, unauthenticated market-data endpoint: `GET https://www.btcc.com/api/futures`.** Found by reading the network traffic of their own XRPUSDT page. Returns 177 instruments; per instrument: `last`, `bid`, `ask`, `index`, `maker_fee`, `taker_fee`, `funding_rate`, `next_funding_rate`, `next_funding_rate_timestamp`, `lowerBound`/`upperBound`, `openInterest`, 24h volumes. Verified from plain Python with no key, no cookie, no account. XRPUSDT at capture: last 1.40267, maker_fee 0, taker_fee 0.01, funding 0.0144.
+- **Unit ambiguity, unresolved:** `taker_fee: 0.01` could be 0.01% or 1%; `funding_rate: 0.0144` likewise. Do not wire these into PnL until the units are confirmed against BTCC's published fee schedule.
+- Still no evidence of a BTCC *demo* API. Their demo trading is a logged-in web feature; the endpoint above is market data only, no order placement.
+
+**Files touched:** `freedom47/execution/_futures_state.py`, `futures_trade.py`, `futures_portfolio.py`, `futures_close.py` (all new), `execution/README.md`, this log.
+
+**Open items:**
+- [ ] Confirm BTCC fee/funding units before using them in any PnL calculation.
+- [ ] User is checking BTCC's developer portal for whether demo accounts issue API keys.
+- [ ] **Still open:** watchlist has two sources of truth. `get_watchlist.py` blocked.
+- [ ] API keys still placeholders — `research_brief.py` / `tune_parameters.py` cannot run.
+- [ ] Remaining rows: `research_brief.py`, `render_brief.py`, `tune_parameters.py`, `get_watchlist.py`, `notify.py`.
+- [ ] (carried) `requirements.txt`; webhook deployment; live exchange connection (needs explicit sign-off).
+
+**Next session should start by:** either the BTCC market-data source (a `fetch_btcc_prices.py` alongside `fetch_prices.py`, using the public endpoint — real prices, no account, feeding the existing paper tracker), or the remaining research/tuning rows once API keys exist.

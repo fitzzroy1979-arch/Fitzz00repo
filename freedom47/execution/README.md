@@ -44,6 +44,10 @@ Three things the architecture docs get wrong about the real source, unresolved:
 | `llm_client.py` | `_call_claude` (L757), `_call_hermes` (L785), `_call_gemini` (L818), `_call_perplexity` (L851), `_extract_json` (L741), endpoints + model defaults (L95–107). All five verified source-identical via `inspect.getsource`. `--check` reports configuration without calling | **done** |
 | `propose_trade.py` | `check_trade_window` (L551, source-identical) + the `get_quote` price lookup and order dict from `cmd_trade` (L649). Computes only; exits 3 when the window is shut | **done** |
 | `log_trade.py` | the `ORDER_LOG` append from `cmd_trade` (L678–680). Interactive `y/N`, no `--yes`, refuses when stdin is not a TTY. Still a stub that never places an order | **done** |
+| `_futures_state.py` | `_load_futures` / `_save_futures` (L1389–1402), `_mark_price` (L1403). State at `.00fitzz/futures.json` per decision 3. Import-only | **done** |
+| `futures_trade.py` | position maths from `cmd_futures_trade` (L1444–1458), verified field-identical long and short. `y/N` + TTY refusal; `--entry-price` works offline | **done** |
+| `futures_portfolio.py` | `cmd_futures_portfolio` (L1475–1517). Read-only, no approval. Degrades to `mark n/a` and an unavailable total when the bridge is down | **done** |
+| `futures_close.py` | `cmd_futures_close` (L1519–1563). `y/N` + TTY refusal. Warns loudly when closing at entry price because no mark was available | **done** |
 
 ## To extract
 
@@ -52,10 +56,6 @@ Three things the architecture docs get wrong about the real source, unresolved:
 | `research_brief.py` | `RESEARCH_SYSTEM` (L1044), `_price_context` (L1064), `_research_user_prompt` (L1089), `_research_symbol` (L1101), `cmd_research` (L1109). **Spends tokens** (Perplexity Sonar) | TODO |
 | `render_brief.py` | `_print_research` (L1139) — Markdown + sources list into `output/` | TODO |
 | `tune_parameters.py` | `cmd_learn` (L967), `LEARN_SYSTEM` (L703), `_learn_user_prompt` (L721), `llm_propose` (L917), `_clamp_params` (L895), `_tune_symbol` (L936), `_print_best` (L1015), `_print_learn_row` (L1022). **Spends tokens.** Not in the old map at all | TODO |
-| `futures_trade.py` | `cmd_futures_trade` (L1420), `_mark_price` (L1403) | TODO |
-| `futures_portfolio.py` | `cmd_futures_portfolio` (L1475) | TODO |
-| `futures_close.py` | `cmd_futures_close` (L1519) | TODO |
-| `_futures_state.py` | `_load_futures` / `_save_futures` (L1389–1402). State stays at `.00fitzz/futures.json` per decision 3 | TODO |
 | `get_watchlist.py` | `TradingViewBridge.get_watchlist` (L197). Resolve the two-sources problem above first | TODO |
 | `notify.py` | — | NEW, no source |
 | `run_directive.py` | — | provided (skeleton) |
