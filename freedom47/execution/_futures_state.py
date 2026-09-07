@@ -60,6 +60,53 @@ def _mark_price(bridge, symbol):
 # Helpers the three futures scripts share
 # --------------------------------------------------------------------------- #
 
+def used_ids(state=None):
+    """Every position id already in play — open positions plus the closed log.
+
+    Closed records keep their id, so reusing one would make the log ambiguous
+    about which position a realised number belongs to.
+    """
+    state = state if state is not None else _load_futures()
+    ids = {p.get("id") for p in state.get("positions", []) if p.get("id")}
+    if FUTURES_CLOSED_LOG.exists():
+        try:
+            for line in FUTURES_CLOSED_LOG.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue  # a torn line should not block a new position
+                if rec.get("id"):
+                    ids.add(rec["id"])
+        except OSError:
+            pass
+    return ids
+
+
+def ensure_unique_id(position, state=None):
+    """Give `position` an unused id, suffixing on collision. Mutates in place.
+
+    Ids are timestamp-derived to the millisecond (`F` + %m%d%H%M%S + ms), so
+    two positions opened inside the same millisecond would otherwise share one
+    -- and futures_close.py selects by id, which would close both. A script or
+    loop hits this easily; a person typing commands cannot.
+
+    The base format is left alone so ids already written to the closed log stay
+    valid; a collision just gains a `-2`, `-3`, ... suffix.
+    """
+    taken = used_ids(state)
+    base = position["id"]
+    if base not in taken:
+        return position
+    n = 2
+    while f"{base}-{n}" in taken:
+        n += 1
+    position["id"] = f"{base}-{n}"
+    return position
+
+
 def log_closed(records):
     """Append realised positions to the closed log, one JSON object per line."""
     FUTURES_CLOSED_LOG.parent.mkdir(parents=True, exist_ok=True)

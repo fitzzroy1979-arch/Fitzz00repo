@@ -347,7 +347,7 @@ This log is the continuous memory of the project across sessions and across AI e
 **Open items:**
 - [ ] Confirm BTCC fee/funding units before any PnL use.
 - [ ] Decide whether BTCC is worth relying on beyond the majors, given half the book quotes zero.
-- [ ] **Decide on the position-id collision** (see 2026-09-05 fallback entry) — inherited from the monolith, not fixed.
+- [x] Position-id collision — **fixed 2026-09-07** with a write-time uniqueness check (option 2: no format change, no migration).
 - [ ] User is checking BTCC's developer portal for demo-account API keys.
 - [ ] **Still open:** watchlist has two sources of truth. `get_watchlist.py` blocked.
 - [ ] API keys still placeholders — `research_brief.py` / `tune_parameters.py` cannot run.
@@ -386,3 +386,37 @@ This log is the continuous memory of the project across sessions and across AI e
 - [ ] (carried) `requirements.txt`; webhook deployment; live exchange connection (needs explicit sign-off).
 
 **Next session should start by:** the id-collision decision, since it affects `futures_trade.py` and `futures_close.py` together. Then the remaining rows as keys and the watchlist question allow.
+
+---
+
+## 2026-09-07 — Claude (Claude Code, desktop) — Fixed the position-id collision at write time
+**Context going in:** User chose option 2 of three for the id collision found in the previous entry: a uniqueness check at write time, keeping the format and avoiding a log migration.
+
+**Done:**
+- `_futures_state.used_ids()` — every id in play, from open positions **and** `.00fitzz/futures_closed.log`. Closed records keep their id, so reusing one would make the log ambiguous about which position a realised number belongs to.
+- `_futures_state.ensure_unique_id()` — leaves an unused id alone; on collision appends `-2`, `-3`, … until free. The `F + %m%d%H%M%S + ms` base is untouched.
+- `futures_trade.py` re-reads state at write time and settles the id against it, printing a notice on stderr when the id it hands out differs from the one it built.
+
+**Decisions:**
+- **Checked against the closed log, not just open positions.** Only checking open positions would let a closed id be reissued, which is the same ambiguity one step removed.
+- A torn line in the closed log is skipped rather than fatal. A half-written log entry should not stop someone opening a position.
+
+**Broke / learned:**
+- Original defect reproduced and then fixed: five positions built in a tight loop now yield `F0907043009883`, `-2`, `-3`, `-4`, `-5` — 5 unique from 5, where before it was 1 unique from 5.
+- A deliberately reused **closed** id was correctly pushed to `-2`.
+- A malformed log line (`{"id": "Fbroken"` with no closing brace) was skipped and the position still got an id.
+- `futures_close.py` verified against suffixed ids: `--target F…-2` selects exactly that one position; `--target XRPUSDT` still selects all three sharing the symbol. Selection semantics unchanged.
+- Approval gate re-checked after the change — no TTY still exits 1, `--dry-run` writes nothing, and the real `.00fitzz/futures.json` was empty before and after. All id testing ran against a scratch directory, never the real portfolio.
+
+**Files touched:** `freedom47/execution/_futures_state.py`, `freedom47/execution/futures_trade.py`, `execution/README.md`, this log.
+
+**Open items:**
+- [ ] Confirm BTCC fee/funding units before any PnL use.
+- [ ] Decide whether BTCC is worth relying on beyond the majors (half its book quotes zero).
+- [ ] User is checking BTCC's developer portal for demo-account API keys.
+- [ ] **Still open:** watchlist has two sources of truth. `get_watchlist.py` blocked.
+- [ ] API keys still placeholders — `research_brief.py` / `tune_parameters.py` cannot run.
+- [ ] Remaining rows: `research_brief.py`, `render_brief.py`, `tune_parameters.py`, `get_watchlist.py`, `notify.py`.
+- [ ] (carried) `requirements.txt`; webhook deployment; live exchange connection (needs explicit sign-off).
+
+**Next session should start by:** the remaining rows as the blockers allow — `get_watchlist.py` once the watchlist question is settled, or the research/tuning trio once API keys exist. `notify.py` is unblocked and needs no keys.

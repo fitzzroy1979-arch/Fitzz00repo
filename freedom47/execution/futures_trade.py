@@ -139,7 +139,14 @@ def main(argv=None):
         print("not opened.", file=sys.stderr)
         return 1
 
+    # Re-read state at write time and settle the id against it. Ids are
+    # timestamp-derived to the millisecond, so anything opening positions in a
+    # loop can collide -- and futures_close.py selects by id.
     state = F._load_futures()
+    asked = pos["id"]
+    F.ensure_unique_id(pos, state)
+    if pos["id"] != asked:
+        print(f"! id {asked} was already taken; using {pos['id']}.", file=sys.stderr)
     state["positions"].append(pos)
     F._save_futures(state)
 
