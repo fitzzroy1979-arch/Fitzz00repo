@@ -30,7 +30,7 @@ Unified CLI (no install needed — run from the repo root):
 
 ```bash
 python3 -m fitzz trade --simulate --watchlist --days 7 --interval 1h
-python3 -m fitzz sweep prices.csv --family ma_cross --objective sharpe
+python3 -m fitzz sweep --csv prices.csv --family ma_cross --objective return
 ```
 
 Or install the `fitzz` console script:
@@ -38,14 +38,14 @@ Or install the `fitzz` console script:
 ```bash
 pip install -e .
 fitzz trade --backtest --symbol BTCUSD --period 1y --interval 1d
-fitzz sweep prices.csv --family ma_cross
+fitzz sweep --csv prices.csv --family ma_cross
 ```
 
 The original entry points still work unchanged:
 
 ```bash
 python3 00fitzz.py --simulate --watchlist --days 7 --interval 1h
-python3 sweep_significance.py prices.csv --family ma_cross
+python3 sweep_significance.py --csv prices.csv --family ma_cross
 ```
 
 Each tool keeps its own flags — run `python3 -m fitzz trade --help` or
