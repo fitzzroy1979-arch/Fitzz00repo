@@ -55,11 +55,13 @@ window to gate them to certain hours (local time):
 import argparse
 import datetime as dt
 import json
+from datetime import datetime, timezone
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -77,7 +79,15 @@ ORDER_LOG = SCRIPT_DIR / ".00fitzz" / "orders.log"
 FUTURES_STATE = SCRIPT_DIR / ".00fitzz" / "futures.json"
 FUTURES_CLOSED_LOG = SCRIPT_DIR / ".00fitzz" / "futures_closed.log"
 
-MAX_BARS = 500  # hard cap enforced by the tv bridge (see core/data.js)
+# Ceiling on a single ohlcv read. The tv bridge enforces its own cap in
+# core/data.js (MAX_OHLCV_BARS); keep the two in step. How much history is
+# actually reachable is a separate limit -- the chart lazy-loads ~300 bars
+# and only pages further back when asked, which is what ensure_history does.
+MAX_BARS = 5000
+
+# Starting cash for --backtest and --simulate when --starting-capital is not
+# given. Both modes read the same --starting-capital flag.
+DEFAULT_STARTING_CASH = 3000.0
 
 # --learn provider defaults. hermes -> Together's OpenAI-compatible endpoint;
 # claude -> the Anthropic API via the official SDK; perplexity -> Sonar over
@@ -137,8 +147,9 @@ class TradingViewBridge:
         self.node = node or os.environ.get("FITZZ_NODE") or shutil.which("node") or "node"
         self.settle = settle          # seconds to let a symbol/timeframe load
         self.verbose = verbose
+        self._last_bars = None        # previous read, to detect stale chart data
 
-    def _run(self, args):
+    def _run(self, args, timeout=60):
         if not self.cli.exists():
             raise BridgeError(
                 f"tv CLI not found at {self.cli}. Point --tv-repo at the "
@@ -147,15 +158,25 @@ class TradingViewBridge:
         cmd = [self.node, str(self.cli), *args]
         if self.verbose:
             print(f"  $ {' '.join(cmd)}", file=sys.stderr)
+        # Collect stdout in a real file rather than a pipe. The tv CLI prints its
+        # JSON with console.log and then calls process.exit(0) on the next line;
+        # node's stdout is asynchronous when it points at a pipe, so the exit
+        # truncates anything past the 64KB pipe buffer. A 500-bar ohlcv read is
+        # ~80KB, which came back as invalid JSON. Writes to a regular file are
+        # synchronous, so the payload always lands whole.
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            with tempfile.TemporaryFile("w+", encoding="utf-8") as fh:
+                proc = subprocess.run(cmd, stdout=fh, stderr=subprocess.PIPE,
+                                      text=True, timeout=timeout)
+                fh.seek(0)
+                stdout = fh.read()
         except FileNotFoundError:
             raise BridgeError(
                 f"Could not launch node ('{self.node}'). Set FITZZ_NODE to your "
                 f"node binary (nvm users: `which node` after sourcing nvm)."
             )
         except subprocess.TimeoutExpired:
-            raise BridgeError(f"tv {' '.join(args)} timed out after 60s.")
+            raise BridgeError(f"tv {' '.join(args)} timed out after {timeout}s.")
 
         # exit code 2 == connection failure in the tv CLI
         if proc.returncode == 2:
@@ -163,9 +184,9 @@ class TradingViewBridge:
                 "Can't reach TradingView Desktop. Launch it with the debug port "
                 "enabled (see tradingview-mcp/SETUP_GUIDE.md), then retry."
             )
-        out = proc.stdout.strip()
+        out = stdout.strip()
         if not out:
-            err = proc.stderr.strip() or f"exit {proc.returncode}"
+            err = (proc.stderr or "").strip() or f"exit {proc.returncode}"
             raise BridgeError(f"tv {' '.join(args)} produced no output: {err}")
         try:
             return json.loads(out)
@@ -188,29 +209,160 @@ class TradingViewBridge:
     def set_timeframe(self, tv_resolution):
         self._run(["timeframe", tv_resolution])
 
-    def get_ohlcv(self, count):
+    def get_chart_state(self):
+        """Current chart symbol + resolution, as the chart itself reports them."""
+        return self._run(["symbol"])
+
+    @staticmethod
+    def _ticker(symbol):
+        """Normalise a symbol for comparison.
+
+        The chart echoes back a fully-qualified symbol that rarely matches what
+        was asked for: 'TSX:NVDA' comes back as 'TSX_DLY:NVDA' (delayed feed),
+        and a bare 'BTCUSD' picks up whatever exchange prefix TradingView chose.
+        Comparing only the ticker after the exchange prefix is what makes the
+        confirmation reliable.
+        """
+        if not symbol:
+            return ""
+        return str(symbol).split(":")[-1].strip().upper()
+
+    def wait_for_chart(self, symbol, tv_resolution=None, timeout=None):
+        """Block until the chart actually shows `symbol` (and `tv_resolution`).
+
+        `tv symbol <X>` returns as soon as the command is accepted, not once the
+        chart has repainted, so reading bars straight after it can return the
+        *previous* symbol's data. Polling the chart's own reported state is the
+        only way to know the switch really landed.
+
+        Returns the confirmed symbol string, or raises BridgeError on timeout.
+        """
+        timeout = self.settle * 8 if timeout is None else timeout
+        want_sym = self._ticker(symbol)
+        deadline = time.time() + timeout
+        last_seen = None
+        while True:
+            try:
+                state = self.get_chart_state()
+                last_seen = state.get("symbol")
+                sym_ok = self._ticker(last_seen) == want_sym
+                res_ok = (tv_resolution is None
+                          or str(state.get("resolution")) == str(tv_resolution))
+                if sym_ok and res_ok:
+                    return last_seen
+            except BridgeError:
+                pass  # chart mid-load; keep polling until the deadline
+            if time.time() >= deadline:
+                raise BridgeError(
+                    f"Chart did not switch to {symbol} within {timeout:.0f}s "
+                    f"(still showing {last_seen!r}). Give TradingView longer to "
+                    f"warm up, or raise --settle."
+                )
+            time.sleep(min(0.25, self.settle))
+
+    @staticmethod
+    def _fingerprint(bars):
+        """Cheap identity for a bar series, used to detect a stale read."""
+        if not bars:
+            return None
+        first, last = bars[0], bars[-1]
+        return (len(bars), first.get("time"), first.get("close"),
+                last.get("time"), last.get("close"))
+
+    def get_ohlcv(self, count, stale_fingerprint=None):
+        """Read bars, retrying while the chart is still loading.
+
+        `stale_fingerprint` is the previous symbol's bar fingerprint. A read that
+        matches it means the chart hadn't repainted yet, so the bars belong to
+        the previous symbol -- retry rather than silently return another
+        symbol's data.
+        """
         count = min(count, MAX_BARS)
-        # The chart may still be loading right after a symbol/timeframe change.
         last_err = None
         for attempt in range(4):
             try:
                 data = self._run(["ohlcv", "-n", str(count)])
                 bars = data.get("bars", [])
                 if bars:
-                    return bars
-                last_err = "no bars returned"
+                    if (stale_fingerprint is not None
+                            and self._fingerprint(bars) == stale_fingerprint):
+                        last_err = "chart still showing the previous symbol's bars"
+                    else:
+                        return bars
+                else:
+                    last_err = "no bars returned"
             except BridgeError as e:
                 last_err = str(e)
             time.sleep(self.settle)
         raise BridgeError(f"Could not read OHLCV: {last_err}")
 
+    def ensure_history(self, count, tv_resolution):
+        """Page the chart back until it holds at least `count` bars.
+
+        TradingView lazy-loads roughly 300 bars per symbol and stops there, so a
+        request for more used to come back silently short -- `--days 500` on a
+        cold chart returned 300 daily bars and reported the truncated window as
+        though it were the one asked for. `tv range` drives requestMoreData
+        until the window is covered, which is the only way to reach the deeper
+        history the feed will serve.
+
+        Returns the number of bars now loaded, or None if the chart wouldn't say.
+        """
+        def depth():
+            try:
+                return self._run(["ohlcv", "-n", "1"]).get("total_available")
+            except BridgeError:
+                return None
+
+        have = depth()
+        if have is not None and have >= count:
+            return have
+
+        per_bar_secs = INTERVAL_MINUTES.get(tv_resolution, 1440) * 60
+        now = int(time.time())
+        # Ask for a calendar window wider than the raw bar count: crypto trades
+        # 24/7, but equities skip nights, weekends and holidays, so a bar never
+        # spans less wall-clock time than its interval and usually spans more.
+        frm = now - int(count * per_bar_secs * 1.6)
+        try:
+            # Paging back runs up to 25 round trips of ~1.8s inside the CLI, so
+            # this needs a far longer leash than a normal bridge call.
+            self._run(["range", "--from", str(frm), "--to", str(now)], timeout=300)
+        except BridgeError as e:
+            print(f"! could not extend chart history: {e}", file=sys.stderr)
+            return have
+        return depth()
+
     def load_bars(self, symbol, tv_resolution, count):
-        """Set symbol + timeframe, wait for the chart to settle, read bars."""
-        self.set_symbol(symbol)
-        time.sleep(self.settle)
-        self.set_timeframe(tv_resolution)
-        time.sleep(self.settle)
-        return self.get_ohlcv(count)
+        """Set symbol + timeframe, confirm the chart switched, then read bars.
+
+        The confirmation matters: without it a fast loop over a watchlist reads
+        the previous symbol's bars and reports identical results for unrelated
+        instruments.
+        """
+        stale = self._fingerprint(self._last_bars)
+        # A busy or still-warming chart can drop the first `symbol` command, so
+        # re-issue it before giving up -- the first symbol after a cold start is
+        # the usual victim.
+        last_err = None
+        for attempt in range(3):
+            self.set_symbol(symbol)
+            self.set_timeframe(tv_resolution)
+            try:
+                self.wait_for_chart(symbol, tv_resolution)
+                break
+            except BridgeError as e:
+                last_err = e
+        else:
+            raise last_err
+        self.ensure_history(count, tv_resolution)
+        bars = self.get_ohlcv(count, stale_fingerprint=stale)
+        if len(bars) < count:
+            print(f"! {symbol}: asked for {count} bars, the feed only has "
+                  f"{len(bars)}. Results cover the shorter window.",
+                  file=sys.stderr)
+        self._last_bars = bars
+        return bars
 
     def get_quote(self, symbol):
         try:
@@ -381,6 +533,233 @@ def _strategy_label(fast, slow, stop_loss_pct=0.0, take_profit_pct=0.0, trend_fi
     return label + ("+" + "+".join(extras) if extras else "")
 
 
+def money_flow_volume(bars):
+    """
+    Per-bar signed money flow — the quantity this strategy follows.
+
+    Each bar's volume is signed by where the close sits inside its range:
+
+        mfm = ((close - low) - (high - close)) / (high - low)
+
+    +1 means the bar closed on its high (buyers took it), -1 on its low
+    (sellers did). Multiplying by volume answers "how much of this bar's
+    money was buy-side?". A zero-range bar carries no directional
+    information, so it contributes nothing.
+    """
+    out = []
+    for b in bars:
+        hi, lo = float(b["high"]), float(b["low"])
+        close = float(b["close"])
+        vol = float(b.get("volume") or 0.0)
+        rng = hi - lo
+        mfm = 0.0 if rng <= 0 else ((close - lo) - (hi - close)) / rng
+        out.append(mfm * vol)
+    return out
+
+
+def chaikin_money_flow(mfv, volumes, window):
+    """
+    Chaikin Money Flow: windowed money-flow volume as a share of total volume.
+
+    Reads in [-1, +1] — sustained positive values mean money has been flowing
+    in across the whole window, not just on one loud bar. That persistence is
+    what separates accumulation from a single spike.
+    """
+    out = [None] * len(mfv)
+    if window <= 0:
+        return out
+    mf_run = 0.0
+    v_run = 0.0
+    for i in range(len(mfv)):
+        mf_run += mfv[i]
+        v_run += volumes[i]
+        if i >= window:
+            mf_run -= mfv[i - window]
+            v_run -= volumes[i - window]
+        if i >= window - 1:
+            out[i] = (mf_run / v_run) if v_run > 0 else 0.0
+    return out
+
+
+def backtest_follow_money(bars, starting_capital, vol_window=20, surge=2.0,
+                          cmf_window=20, cmf_enter=0.05, cmf_exit=-0.05,
+                          confirm=3, stop_loss_pct=0.0, take_profit_pct=0.0,
+                          trend_filter=0, cot_gate=None):
+    """
+    Long-only "follow the money" — ride visible buy-side accumulation.
+
+    Two conditions must hold together to enter, which is the whole idea:
+
+      * A big buy: this bar (or one within the last `confirm` bars) traded at
+        least `surge` x its SMA(vol_window) volume AND closed in the upper half
+        of its range, so the size was buyers lifting offers rather than sellers
+        hitting bids.
+      * Sustained accumulation: CMF(cmf_window) >= cmf_enter, meaning money has
+        been flowing in across the window rather than on that one bar.
+
+    The second condition is this toolkit's stand-in for commercial/institutional
+    acquisition. Real treasury buys, ETF creations and M&A are NOT available
+    from any data source wired up here (the TradingView bridge serves OHLCV
+    only), so persistent net accumulation across many sessions is used as the
+    observable proxy. It is a proxy, not the filing.
+
+    Exit on distribution (CMF <= cmf_exit) — the money leaving is the mirror of
+    the signal that got us in — or on the shared stop-loss/take-profit controls.
+
+    Returns the same metrics dict shape as backtest_sma_cross.
+    """
+    closes = [float(b["close"]) for b in bars]
+    volumes = [float(b.get("volume") or 0.0) for b in bars]
+    n = len(closes)
+    warmup = max(vol_window, cmf_window, trend_filter)
+    if n < warmup + 2:
+        return {"error": f"not enough bars ({n}) for windows "
+                         f"(vol {vol_window}, cmf {cmf_window}, trend {trend_filter})"}
+    if sum(volumes) <= 0:
+        return {"error": "no volume on these bars; follow_money needs volume "
+                         "(try an exchange symbol such as BITSTAMP:BTCUSD "
+                         "rather than an INDEX: feed)"}
+
+    mfv = money_flow_volume(bars)
+    cmf = chaikin_money_flow(mfv, volumes, cmf_window)
+    vol_ma = sma(volumes, vol_window)
+    trend_ma = sma(closes, trend_filter) if trend_filter else [None] * n
+
+    # A bar is a "big buy" when outsized volume arrives on the buy side.
+    big_buy = [
+        vol_ma[i] is not None and vol_ma[i] > 0
+        and volumes[i] >= surge * vol_ma[i]
+        and mfv[i] > 0
+        for i in range(n)
+    ]
+
+    cash = float(starting_capital)
+    units = 0.0
+    in_pos = False
+    entry_price = 0.0
+    trades = []
+    equity_curve = []
+
+    for i in range(n):
+        price = closes[i]
+
+        # Exits first, so a stop can fire on the same bar an entry would.
+        if in_pos:
+            exit_now = (
+                (stop_loss_pct and price <= entry_price * (1 - stop_loss_pct / 100)) or
+                (take_profit_pct and price >= entry_price * (1 + take_profit_pct / 100)) or
+                (cmf[i] is not None and cmf[i] <= cmf_exit)
+            )
+            if exit_now:
+                cash = units * price
+                trades.append((entry_price, price, (price / entry_price - 1) * 100))
+                units = 0.0
+                in_pos = False
+
+        # Entry: accumulation on the tape, with a big buy close behind it.
+        if not in_pos and cmf[i] is not None and cmf[i] >= cmf_enter:
+            recent_big = any(big_buy[max(0, i - confirm + 1):i + 1])
+            trend_ok = (not trend_filter) or (trend_ma[i] is not None and price > trend_ma[i])
+            cot_ok = cot_gate is None or cot_gate[i]
+            if recent_big and trend_ok and cot_ok:
+                units = cash / price
+                cash = 0.0
+                in_pos = True
+                entry_price = price
+
+        equity_curve.append(cash + units * price)
+
+    final_price = closes[-1]
+    final_equity = cash + units * final_price
+    if in_pos:
+        trades.append((entry_price, final_price, (final_price / entry_price - 1) * 100))
+
+    peak = equity_curve[0]
+    max_dd = 0.0
+    for e in equity_curve:
+        peak = max(peak, e)
+        if peak > 0:
+            max_dd = min(max_dd, (e / peak - 1) * 100)
+
+    wins = [t for t in trades if t[2] > 0]
+    buy_hold = (final_price / closes[0] - 1) * 100
+    live_cmf = [c for c in cmf if c is not None]
+
+    return {
+        "bars": n,
+        "from": fmt_time(bars[0].get("time")),
+        "to": fmt_time(bars[-1].get("time")),
+        "starting_capital": round(float(starting_capital), 2),
+        "final_equity": round(final_equity, 2),
+        "return_pct": round((final_equity / starting_capital - 1) * 100, 2),
+        "buy_hold_pct": round(buy_hold, 2),
+        "trades": len(trades),
+        "win_rate_pct": round(100 * len(wins) / len(trades), 1) if trades else 0.0,
+        "max_drawdown_pct": round(max_dd, 2),
+        "big_buys": sum(1 for x in big_buy if x),
+        "avg_cmf": round(sum(live_cmf) / len(live_cmf), 4) if live_cmf else 0.0,
+        "cot_gated_bars": (sum(1 for g in cot_gate if g) if cot_gate else None),
+        "strategy": _fm_label(surge, cmf_window, cmf_enter, stop_loss_pct,
+                              take_profit_pct, trend_filter,
+                              cot=bool(cot_gate)),
+    }
+
+
+def build_cot_gate(bars, market, min_change=0.0):
+    """
+    Per-bar entry gate from CFTC commercial positioning.
+
+    A bar is gated open when the most recently *released* COT report shows the
+    commercial net book rising by at least `min_change` contracts week over
+    week. Alignment uses each report's release date, not its as-of Tuesday, so
+    the backtest never sees a number before the public did.
+
+    Returns a list of bools, one per bar, or None if the market had no data.
+    """
+    from fitzz import flows
+
+    # Prefer an exact contract match. A substring cannot isolate the headline
+    # contract ("BITCOIN - CHICAGO MERCANTILE EXCHANGE" is a substring of the
+    # Micro contract's name), and CME and Micro report the same number of
+    # weeks, so picking by row count alone would be a coin flip between them.
+    raw = flows.fetch_cot(market, exact=True) or flows.fetch_cot(market)
+    rows = flows.cot_net_changes(raw)
+    if not rows:
+        return None
+    counts = {}
+    for r in rows:
+        counts[r["market"]] = counts.get(r["market"], 0) + 1
+    chosen = max(counts, key=counts.get)
+    series = sorted((r for r in rows if r["market"] == chosen),
+                    key=lambda r: r["available_from"])
+
+    gate = []
+    for b in bars:
+        ts = b.get("time")
+        day = (datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+               if isinstance(ts, (int, float)) else "")
+        live = [r for r in series if r["available_from"] <= day]
+        latest = live[-1] if live else None
+        ch = latest["comm_net_change"] if latest else None
+        gate.append(ch is not None and ch >= min_change)
+    return gate
+
+
+def _fm_label(surge, cmf_window, cmf_enter, stop_loss_pct=0.0,
+              take_profit_pct=0.0, trend_filter=0, cot=False):
+    label = f"follow_money({surge:g}xvol/cmf{cmf_window}>={cmf_enter:g})"
+    extras = []
+    if cot:
+        extras.append("cot")
+    if trend_filter:
+        extras.append(f"trend{trend_filter}")
+    if stop_loss_pct:
+        extras.append(f"sl{stop_loss_pct:g}%")
+    if take_profit_pct:
+        extras.append(f"tp{take_profit_pct:g}%")
+    return label + ("+" + "+".join(extras) if extras else "")
+
+
 def fmt_time(t):
     if t is None:
         return None
@@ -432,11 +811,23 @@ def cmd_backtest(args, bridge):
     for sym in symbols:
         try:
             bars = bridge.load_bars(sym, tv_res, capped)
-            metrics = backtest_sma_cross(
-                bars, args.starting_capital, fast=args.fast, slow=args.slow,
-                stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
-                trend_filter=args.trend_filter,
-            )
+            if args.strategy == "follow_money":
+                gate = (build_cot_gate(bars, args.fm_cot, args.fm_cot_min)
+                        if args.fm_cot else None)
+                metrics = backtest_follow_money(
+                    bars, args.starting_capital, cot_gate=gate,
+                    vol_window=args.fm_vol_window, surge=args.fm_surge,
+                    cmf_window=args.fm_cmf_window, cmf_enter=args.fm_cmf_enter,
+                    cmf_exit=args.fm_cmf_exit, confirm=args.fm_confirm,
+                    stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
+                    trend_filter=args.trend_filter,
+                )
+            else:
+                metrics = backtest_sma_cross(
+                    bars, args.starting_capital, fast=args.fast, slow=args.slow,
+                    stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
+                    trend_filter=args.trend_filter,
+                )
         except BridgeError as e:
             metrics = {"error": str(e)}
         metrics["symbol"] = sym
@@ -1444,8 +1835,14 @@ def build_parser():
     bt.add_argument("--symbol", help="Single symbol to backtest (instead of --watchlist).")
     bt.add_argument("--period", default="1y", help="Lookback, e.g. 1y, 6mo, 90d (default 1y).")
     bt.add_argument("--interval", default="1d", help="Bar interval, e.g. 1d, 4h, 1h (default 1d).")
-    bt.add_argument("--starting-capital", type=float, default=1000.0,
-                    help="Starting capital for the backtest (default 1000).")
+    bt.add_argument("--starting-capital", type=float, default=DEFAULT_STARTING_CASH,
+                    help="Starting capital for the backtest "
+                         f"(default {DEFAULT_STARTING_CASH:g}).")
+    bt.add_argument("--strategy", choices=["sma_cross", "follow_money"],
+                    default="sma_cross",
+                    help="Which strategy to backtest (default sma_cross). "
+                         "follow_money rides big buy-side volume plus sustained "
+                         "accumulation.")
     bt.add_argument("--fast", type=int, default=20, help="Fast SMA window (default 20).")
     bt.add_argument("--slow", type=int, default=50, help="Slow SMA window (default 50).")
     bt.add_argument("--stop-loss", type=float, default=0.0,
@@ -1454,6 +1851,28 @@ def build_parser():
                     help="Take-profit %% above entry, e.g. 15 (default 0 = off).")
     bt.add_argument("--trend-filter", type=int, default=0,
                     help="Only go long when price > SMA(N), e.g. 200 (default 0 = off).")
+    bt.add_argument("--fm-vol-window", type=int, default=20,
+                    help="[follow_money] Baseline window for average volume (default 20).")
+    bt.add_argument("--fm-surge", type=float, default=2.0,
+                    help="[follow_money] A bar is a 'big buy' at this multiple of "
+                         "average volume (default 2.0).")
+    bt.add_argument("--fm-cmf-window", type=int, default=20,
+                    help="[follow_money] Chaikin Money Flow window (default 20).")
+    bt.add_argument("--fm-cmf-enter", type=float, default=0.05,
+                    help="[follow_money] Enter when CMF is at least this (default 0.05).")
+    bt.add_argument("--fm-cmf-exit", type=float, default=-0.05,
+                    help="[follow_money] Exit when CMF falls to this (default -0.05).")
+    bt.add_argument("--fm-confirm", type=int, default=3,
+                    help="[follow_money] A big buy must have landed within this many "
+                         "bars of entry (default 3).")
+    bt.add_argument("--fm-cot", nargs="?", const="BITCOIN - CHICAGO MERCANTILE EXCHANGE",
+                    default=None, metavar="MARKET",
+                    help="[follow_money] Also require CFTC commercial positioning to be "
+                         "rising (default market: CME Bitcoin). Weekly data, aligned on "
+                         "release date.")
+    bt.add_argument("--fm-cot-min", type=float, default=0.0,
+                    help="[follow_money] Minimum week-over-week rise in the commercial "
+                         "net book to open the gate (default 0).")
     bt.add_argument("--proven-only", action="store_true",
                     help="Keep only symbols whose backtest return > 0 with at least "
                          "--proven-min-trades trades (useful with --watchlist).")

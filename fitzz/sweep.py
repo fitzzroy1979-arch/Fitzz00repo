@@ -97,7 +97,13 @@ def load_csv(path):
 
 
 def load_json(path):
-    """00fitzz / tradingview-mcp bar format: [{time, open, high, low, close}, ...]."""
+    """
+    00fitzz / tradingview-mcp bar format: [{time, open, high, low, close}, ...].
+
+    Returns (close, bars). `bars` is the raw dict list when the file carried
+    one, else None -- a custom strategy family that needs high/low/volume gets
+    it, while everything downstream keeps working off `close` alone.
+    """
     with open(path) if path != "-" else sys.stdin as fh:
         data = json.load(fh)
     if isinstance(data, dict):
@@ -108,8 +114,8 @@ def load_json(path):
         key = next((k for k in ("close", "Close", "c") if k in data[0]), None)
         if key is None:
             raise SystemExit(f"{path}: bars have no close field ({list(data[0])})")
-        return np.asarray([float(b[key]) for b in data], dtype=np.float64)
-    return np.asarray([float(x) for x in data], dtype=np.float64)
+        return np.asarray([float(b[key]) for b in data], dtype=np.float64), data
+    return np.asarray([float(x) for x in data], dtype=np.float64), None
 
 
 # --------------------------------------------------------------------------- #
@@ -213,8 +219,15 @@ def breakout_family(close, entries, exits, long_only=False):
     return np.column_stack(cols), labels, max(windows) if windows else 1
 
 
-def load_custom_family(spec, close):
-    """--strategy path/to/file.py:funcname"""
+def load_custom_family(spec, close, bars=None):
+    """
+    --strategy path/to/file.py:funcname
+
+    The target is called FUNC(close) as before. If it declares a second
+    positional parameter it is called FUNC(close, bars) instead, so a family
+    that needs high/low/volume can have them. `bars` is None for --csv and
+    --synthetic input, which carry no OHLCV.
+    """
     path, _, func = spec.partition(":")
     if not func:
         raise SystemExit("--strategy needs the form path/to/file.py:function_name")
@@ -227,7 +240,21 @@ def load_custom_family(spec, close):
     spec_obj.loader.exec_module(mod)
     if not hasattr(mod, func):
         raise SystemExit(f"{path} has no function '{func}'")
-    pos, labels = getattr(mod, func)(close)
+    fn = getattr(mod, func)
+    import inspect
+    try:
+        n_params = len([prm for prm in inspect.signature(fn).parameters.values()
+                        if prm.kind in (prm.POSITIONAL_ONLY, prm.POSITIONAL_OR_KEYWORD)])
+    except (TypeError, ValueError):
+        n_params = 1
+    if n_params >= 2:
+        if bars is None:
+            raise SystemExit(
+                f"{spec}: {func}() wants bars, but --csv/--synthetic input has no "
+                f"OHLCV. Use --json with tradingview-mcp bars.")
+        pos, labels = fn(close, bars)
+    else:
+        pos, labels = fn(close)
     pos = np.asarray(pos, dtype=np.float32)
     if pos.ndim == 1:
         pos = pos[:, None]
@@ -445,10 +472,10 @@ def verdict(p_spa, p_rc):
     return "NOT SIGNIFICANT. This is what searching noise looks like."
 
 
-def run_test(close, args, label="", quiet=False):
+def run_test(close, args, label="", quiet=False, bars=None):
     """Build the universe, score it, and price the search bias."""
     if args.strategy:
-        pos, labels, warm = load_custom_family(args.strategy, close)
+        pos, labels, warm = load_custom_family(args.strategy, close, bars)
     elif args.family == "breakout":
         pos, labels, warm = breakout_family(close, args.entry, args.exit, args.long_only)
     else:
@@ -684,11 +711,14 @@ def main(argv=None):
 
     if args.csv:
         close, series_label = load_csv(args.csv), os.path.basename(args.csv)
+        bars = None
     elif args.json:
-        close, series_label = load_json(args.json), os.path.basename(args.json)
+        close, bars = load_json(args.json)
+        series_label = os.path.basename(args.json)
     elif args.synthetic:
         close = random_walk(args.synthetic, phi=args.phi,
                             rng=np.random.default_rng(args.seed))
+        bars = None
         series_label = (f"synthetic random walk, phi={args.phi:g}"
                         + ("  (NO EDGE EXISTS)" if args.phi == 0 else "  (edge planted)"))
     else:
@@ -705,7 +735,8 @@ def main(argv=None):
             raise SystemExit("--holdout must be between 0 and 0.9")
         split = int(len(close) * (1 - args.holdout))
 
-    res, _ = run_test(close[:split], args, quiet=False)
+    res, _ = run_test(close[:split], args, quiet=False,
+                      bars=(bars[:split] if bars else None))
     print_report(res, args, close[:split], series_label
                  + (f"  [search window: first {split:,} bars]" if args.holdout else ""))
 
@@ -715,7 +746,7 @@ def main(argv=None):
         # split, but score_from=split keeps every scored bar out of sample.
         try:
             if args.strategy:
-                pos, labels, warm = load_custom_family(args.strategy, close)
+                pos, labels, warm = load_custom_family(args.strategy, close, bars)
             elif args.family == "breakout":
                 pos, labels, warm = breakout_family(close, args.entry, args.exit,
                                                     args.long_only)
