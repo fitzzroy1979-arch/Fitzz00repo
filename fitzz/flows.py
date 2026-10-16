@@ -38,7 +38,7 @@ import json
 import sys
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 CFTC_LEGACY = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
 SEC_FULLTEXT = "https://efts.sec.gov/LATEST/search-index"
@@ -207,6 +207,167 @@ def fetch_sec_filings(query, forms=None, since=None, until=None, limit=20,
     return {"total": total, "filings": out[:limit], "returned": len(hits)}
 
 
+
+# --------------------------------------------------------------------------- #
+# Corporate events
+# --------------------------------------------------------------------------- #
+
+# Acquisitions by the company behind an asset. Ripple is private, so unlike
+# MSTR's bitcoin buys none of this is reachable from EDGAR -- it is compiled
+# from the trade press and carried here so an analysis is reproducible rather
+# than retyped. Treat it as a curated list with the provenance attached, not
+# as a feed.
+#
+# `precision` says how far the date can be trusted. Only "day" entries are
+# aligned to bars by event_study(); "month" and "year" are listed and skipped,
+# because sliding an event by three weeks invents a result. `disputed` marks a
+# date that sources do not agree on.
+CORPORATE_EVENTS = {
+    "XRP": [
+        {"date": "2023-05-17", "precision": "month", "target": "Metaco",
+         "amount_usd": 250e6, "kind": "announced",
+         "note": "Swiss digital-asset custody; sources give May 2023"},
+        {"date": "2024-06-01", "precision": "month", "target": "Standard Custody & Trust",
+         "amount_usd": None, "kind": "closed",
+         "note": "regulated trust entity; completed June 2024"},
+        {"date": "2025-04-08", "precision": "day", "target": "Hidden Road",
+         "amount_usd": 1.25e9, "kind": "announced", "disputed": True,
+         "note": "prime broker, now Ripple Prime; some sources say only April 2025"},
+        {"date": "2025-08-07", "precision": "day", "target": "Rail",
+         "amount_usd": 200e6, "kind": "announced",
+         "note": "Toronto stablecoin payments platform"},
+        {"date": "2025-10-16", "precision": "day", "target": "GTreasury",
+         "amount_usd": 1.0e9, "kind": "announced",
+         "note": "treasury management, now Ripple Treasury"},
+        {"date": "2025-10-24", "precision": "day", "target": "Hidden Road",
+         "amount_usd": None, "kind": "closed", "note": "close of the April deal"},
+        {"date": "2025-11-03", "precision": "day", "target": "Palisade",
+         "amount_usd": None, "kind": "announced", "note": "custody and wallets"},
+        {"date": "2026-01-06", "precision": "day", "target": "Solvexia",
+         "amount_usd": None, "kind": "announced",
+         "note": "financial automation; dated from Ripple's own release"},
+        {"date": "2026-01-01", "precision": "year", "target": "BC Payments Australia",
+         "amount_usd": None, "kind": "announced",
+         "note": "Banking Circle payments arm; no month reported"},
+    ],
+}
+
+
+def fetch_events(asset="XRP", dated_only=False):
+    """Curated corporate events for an asset, oldest first."""
+    rows = sorted(CORPORATE_EVENTS.get(asset.upper(), []), key=lambda e: e["date"])
+    if dated_only:
+        rows = [e for e in rows if e["precision"] == "day"]
+    return rows
+
+
+def event_study(events, bars, horizons=(1, 5, 10, 30), window_pad_days=60):
+    """
+    Forward returns after each event, against a baseline drawn from the same
+    stretch of time.
+
+    The baseline matters more than it looks. Events cluster, and a cluster
+    sitting inside a drawdown will look bearish against a multi-year average
+    that includes a bull run -- which says something about when the company
+    was acquisitive, not about what the acquisitions did. So the comparison
+    here is every day in the span the events occupy (padded either side),
+    not every day on record.
+
+    Only "day"-precision events are used. Returns None if none are usable.
+    """
+    px = {}
+    for b in bars:
+        ts = b.get("time")
+        if isinstance(ts, (int, float)):
+            px[datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")] = float(b["close"])
+    days = sorted(px)
+    if not days:
+        return None
+    dated = [e for e in events if e["precision"] == "day"
+             and days[0] <= e["date"] <= days[-1]]
+    if not dated:
+        return None
+
+    def idx_on_or_after(d):
+        for i, x in enumerate(days):
+            if x >= d:
+                return i
+        return None
+
+    lo = _add_days(min(e["date"] for e in dated), -window_pad_days)
+    hi = _add_days(max(e["date"] for e in dated), window_pad_days)
+
+    per_event, agg = [], {}
+    for e in dated:
+        i = idx_on_or_after(e["date"])
+        rets = {}
+        for h in horizons:
+            j = i + h
+            rets[h] = ((px[days[j]] / px[days[i]] - 1) * 100) if j < len(days) else None
+        per_event.append({**e, "price": px[days[i]], "returns": rets})
+
+    for h in horizons:
+        ev = [r["returns"][h] for r in per_event if r["returns"][h] is not None]
+        win, full = [], []
+        for i, d in enumerate(days):
+            j = i + h
+            if j >= len(days):
+                continue
+            r = (px[days[j]] / px[d] - 1) * 100
+            full.append(r)
+            if lo <= d <= hi:
+                win.append(r)
+        agg[h] = {
+            "event_mean": sum(ev) / len(ev) if ev else None,
+            "baseline_window_mean": sum(win) / len(win) if win else None,
+            "baseline_full_mean": sum(full) / len(full) if full else None,
+            "n_events": len(ev),
+        }
+    return {"events": per_event, "horizons": list(horizons),
+            "baseline_window": [lo, hi], "aggregate": agg,
+            "skipped": [e["target"] for e in events if e["precision"] != "day"]}
+
+
+def _print_events(rows, asset):
+    print(f"\nCorporate events — {asset}")
+    print(f"{'date':<12}{'prec':<7}{'kind':<11}{'amount':>10}  target")
+    for e in rows:
+        amt = f"${e['amount_usd']/1e9:.2f}B" if e.get("amount_usd") and e["amount_usd"] >= 1e9 \
+            else (f"${e['amount_usd']/1e6:.0f}M" if e.get("amount_usd") else "—")
+        flag = " (disputed date)" if e.get("disputed") else ""
+        print(f"{e['date']:<12}{e['precision']:<7}{e['kind']:<11}{amt:>10}  "
+              f"{e['target']}{flag}")
+    print("\n  Compiled from trade press, not filings: the company is private, so "
+          "there is no\n  EDGAR feed for these. Only day-precision rows can be "
+          "aligned to price bars.")
+
+
+def _print_event_study(res):
+    if not res:
+        print("\n  no day-precision events inside the price history")
+        return
+    hs = res["horizons"]
+    print(f"\n{'date':<12}{'target':<22}{'price':>10}" + "".join(f"{'+'+str(h)+'d':>9}" for h in hs))
+    for e in res["events"]:
+        line = f"{e['date']:<12}{e['target'][:21]:<22}{e['price']:>10.4f}"
+        for h in hs:
+            r = e["returns"][h]
+            line += f"{r:>+9.1f}" if r is not None else f"{'-':>9}"
+        print(line)
+    lo, hi = res["baseline_window"]
+    print(f"\n{'horizon':<10}{'events':>12}{'same period':>14}{'full history':>15}")
+    for h in hs:
+        a = res["aggregate"][h]
+        print(f"+{h}d{'':<7}{a['event_mean']:>+11.2f}%{a['baseline_window_mean']:>+13.2f}%"
+              f"{a['baseline_full_mean']:>+14.2f}%")
+    n = res["aggregate"][hs[0]]["n_events"]
+    print(f"\n  n = {n} events, baseline window {lo} -> {hi}")
+    if res["skipped"]:
+        print(f"  skipped (date not precise enough): {', '.join(res['skipped'])}")
+    print(f"  {n} events cannot support a significance test. Read this as "
+          f"description,\n  not evidence, and check whether one or two events "
+          f"carry the whole pattern.")
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -273,6 +434,15 @@ def build_parser():
                    help="Restrict --sec to form types, e.g. 8-K or 13F-HR.")
     p.add_argument("--since", default=None,
                    help="Earliest date, YYYY-MM-DD.")
+    p.add_argument("--events", nargs="?", const="XRP", default=None, metavar="ASSET",
+                   help="Curated corporate events for ASSET (default XRP).")
+    p.add_argument("--event-study", action="store_true",
+                   help="With --events: pull bars and measure the price response.")
+    p.add_argument("--event-symbol", default=None,
+                   help="TradingView symbol for --event-study "
+                        "(default: COINBASE:<ASSET>USD).")
+    p.add_argument("--event-bars", type=int, default=1500,
+                   help="Bars to pull for --event-study (default 1500 daily).")
     p.add_argument("--sort", choices=["date", "relevance"], default="date",
                    help="Order --sec results newest-first (default) or by "
                         "EDGAR's relevance ranking.")
@@ -286,7 +456,7 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    if not args.cot and not args.sec:
+    if not args.cot and not args.sec and not args.events:
         args.cot = "BITCOIN"
 
     payload = {}
@@ -296,6 +466,24 @@ def main(argv=None):
             payload["cot"] = rows
             if not args.json:
                 _print_cot(rows, args.cot, limit=args.limit)
+        if args.events:
+            evs = fetch_events(args.events)
+            if not evs:
+                raise SystemExit(f"no curated events for {args.events!r}; "
+                                 f"known: {', '.join(sorted(CORPORATE_EVENTS))}")
+            payload["events"] = evs
+            if not args.json:
+                _print_events(evs, args.events.upper())
+            if args.event_study:
+                # imported lazily: the rest of this module needs no bridge
+                from fitzz.trading import TradingViewBridge, resolve_interval
+                sym = args.event_symbol or f"COINBASE:{args.events.upper()}USD"
+                bars = TradingViewBridge().load_bars(sym, resolve_interval("1d"),
+                                                     args.event_bars)
+                study = event_study(evs, bars)
+                payload["event_study"] = study
+                if not args.json:
+                    _print_event_study(study)
         if args.sec:
             res = fetch_sec_filings(args.sec, forms=args.forms,
                                     since=args.since, limit=args.limit,
