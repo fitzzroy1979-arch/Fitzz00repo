@@ -61,7 +61,8 @@ def _get_json(url, params=None, headers=None, timeout=30):
 # CFTC
 # --------------------------------------------------------------------------- #
 
-def fetch_cot(market="BITCOIN", since=None, limit=400, exact=False):
+def fetch_cot(market="BITCOIN", since=None, limit=None, exact=False,
+              page_size=1000, max_rows=200000):
     """
     Weekly commercial / non-commercial positioning. Newest first.
 
@@ -69,6 +70,14 @@ def fetch_cot(market="BITCOIN", since=None, limit=400, exact=False):
     exists because substrings cannot isolate the headline contract: the full
     name "BITCOIN - CHICAGO MERCANTILE EXCHANGE" is itself a substring of
     "MICRO BITCOIN - CHICAGO MERCANTILE EXCHANGE".
+
+    Pages until the server runs out of rows. `limit=None` means every
+    matching row; pass an int to stop early. A single request used to cap at
+    400, which silently truncated any market with more history than that and
+    produced confident statistics over a partial series.
+
+    Paging needs a total order or rows shift between pages: the report date
+    alone ties across contracts, so the market name breaks the tie.
     """
     if exact:
         where = f'upper(market_and_exchange_names) = "{market.upper()}"'
@@ -76,17 +85,30 @@ def fetch_cot(market="BITCOIN", since=None, limit=400, exact=False):
         where = f'upper(market_and_exchange_names) like "%{market.upper()}%"' 
     if since:
         where += f' AND report_date_as_yyyy_mm_dd > "{since}"'
-    rows = _get_json(CFTC_LEGACY, {
-        "$where": where,
-        "$select": ",".join([
-            "market_and_exchange_names", "report_date_as_yyyy_mm_dd",
-            "comm_positions_long_all", "comm_positions_short_all",
-            "noncomm_positions_long_all", "noncomm_positions_short_all",
-            "open_interest_all",
-        ]),
-        "$order": "report_date_as_yyyy_mm_dd DESC",
-        "$limit": limit,
-    })
+    select = ",".join([
+        "market_and_exchange_names", "report_date_as_yyyy_mm_dd",
+        "comm_positions_long_all", "comm_positions_short_all",
+        "noncomm_positions_long_all", "noncomm_positions_short_all",
+        "open_interest_all",
+    ])
+    rows, offset = [], 0
+    while True:
+        want = page_size if limit is None else min(page_size, limit - len(rows))
+        if want <= 0:
+            break
+        page = _get_json(CFTC_LEGACY, {
+            "$where": where,
+            "$select": select,
+            "$order": "report_date_as_yyyy_mm_dd DESC, market_and_exchange_names",
+            "$limit": want,
+            "$offset": offset,
+        })
+        rows.extend(page)
+        if len(page) < want:          # server had nothing more
+            break
+        offset += len(page)
+        if len(rows) >= max_rows:     # runaway guard, not an expected path
+            break
     out = []
     for r in rows:
         def _i(k):
