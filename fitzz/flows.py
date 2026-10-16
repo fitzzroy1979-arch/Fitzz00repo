@@ -283,10 +283,21 @@ def event_study(events, bars, horizons=(1, 5, 10, 30), window_pad_days=60):
     days = sorted(px)
     if not days:
         return None
-    dated = [e for e in events if e["precision"] == "day"
-             and days[0] <= e["date"] <= days[-1]]
+    all_dated = [e for e in events if e["precision"] == "day"]
+    dated = [e for e in all_dated if days[0] <= e["date"] <= days[-1]]
     if not dated:
-        return None
+        # Distinguish "the events predate this asset" from "the chart had not
+        # finished paging history back when we read it". The second looks
+        # identical from here but is a bad read, not a result: the TradingView
+        # chart lazy-loads a few hundred bars and only reaches further back
+        # when asked, so a read taken too soon after a symbol switch returns a
+        # short series that silently excludes every event.
+        return {"events": [], "horizons": list(horizons), "aggregate": {},
+                "baseline_window": [days[0], days[-1]], "skipped": [],
+                "coverage": [days[0], days[-1], len(days)],
+                "event_span": ([min(e["date"] for e in all_dated),
+                                max(e["date"] for e in all_dated)]
+                               if all_dated else None)}
 
     def idx_on_or_after(d):
         for i, x in enumerate(days):
@@ -344,7 +355,18 @@ def _print_events(rows, asset):
 
 def _print_event_study(res):
     if not res:
-        print("\n  no day-precision events inside the price history")
+        print("\n  no price history returned")
+        return
+    if not res["events"]:
+        lo, hi, n = res.get("coverage", ("?", "?", 0))
+        span = res.get("event_span")
+        print(f"\n  no day-precision events inside the price history")
+        print(f"  price covers {lo} -> {hi} ({n} bars); events span "
+              f"{span[0]} -> {span[1]}" if span else "")
+        if span and n and span[0] < lo:
+            print(f"  the events predate this history. If {n} bars looks short "
+                  f"for this symbol,\n  the chart was still paging when it was "
+                  f"read -- rerun, or raise --event-bars.")
         return
     hs = res["horizons"]
     print(f"\n{'date':<12}{'target':<22}{'price':>10}" + "".join(f"{'+'+str(h)+'d':>9}" for h in hs))
