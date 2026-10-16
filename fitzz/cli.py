@@ -7,12 +7,16 @@ Usage:
 Tools:
     trade   Run the 00fitzz trading CLI (backtest/learn/research/simulate/...).
     sweep   Run the sweep-significance analysis (Reality Check / SPA).
+    feed    Stream live crypto prices from CoinMarketCap's WebSocket.
+    flows   Public money flow: CFTC positioning and SEC filings.
 
 The first argument selects the tool; everything after it is forwarded verbatim
 to that tool's own argument parser, so every existing flag keeps working, e.g.:
 
     fitzz trade --simulate --watchlist --days 7 --interval 1h
     fitzz sweep prices.csv --family ma_cross --objective sharpe
+    fitzz feed --symbols BTC,ETH
+    fitzz flows --cot BITCOIN
 """
 
 import sys
@@ -20,6 +24,8 @@ import sys
 TOOLS = {
     "trade": ("fitzz.trading", "the 00fitzz trading CLI"),
     "sweep": ("fitzz.sweep", "sweep-significance analysis"),
+    "feed": ("fitzz.feed", "live CoinMarketCap price stream"),
+    "flows": ("fitzz.flows", "SEC filings and CFTC positioning"),
 }
 
 # Friendly aliases so muscle memory / old names still route correctly.
@@ -28,6 +34,10 @@ ALIASES = {
     "00fitzz": "trade",
     "significance": "sweep",
     "sweep_significance": "sweep",
+    "prices": "feed",
+    "stream": "feed",
+    "cot": "flows",
+    "sec": "flows",
 }
 
 

@@ -55,6 +55,7 @@ window to gate them to certain hours (local time):
 import argparse
 import datetime as dt
 import json
+from datetime import datetime, timezone
 import os
 import re
 import shutil
@@ -532,6 +533,233 @@ def _strategy_label(fast, slow, stop_loss_pct=0.0, take_profit_pct=0.0, trend_fi
     return label + ("+" + "+".join(extras) if extras else "")
 
 
+def money_flow_volume(bars):
+    """
+    Per-bar signed money flow — the quantity this strategy follows.
+
+    Each bar's volume is signed by where the close sits inside its range:
+
+        mfm = ((close - low) - (high - close)) / (high - low)
+
+    +1 means the bar closed on its high (buyers took it), -1 on its low
+    (sellers did). Multiplying by volume answers "how much of this bar's
+    money was buy-side?". A zero-range bar carries no directional
+    information, so it contributes nothing.
+    """
+    out = []
+    for b in bars:
+        hi, lo = float(b["high"]), float(b["low"])
+        close = float(b["close"])
+        vol = float(b.get("volume") or 0.0)
+        rng = hi - lo
+        mfm = 0.0 if rng <= 0 else ((close - lo) - (hi - close)) / rng
+        out.append(mfm * vol)
+    return out
+
+
+def chaikin_money_flow(mfv, volumes, window):
+    """
+    Chaikin Money Flow: windowed money-flow volume as a share of total volume.
+
+    Reads in [-1, +1] — sustained positive values mean money has been flowing
+    in across the whole window, not just on one loud bar. That persistence is
+    what separates accumulation from a single spike.
+    """
+    out = [None] * len(mfv)
+    if window <= 0:
+        return out
+    mf_run = 0.0
+    v_run = 0.0
+    for i in range(len(mfv)):
+        mf_run += mfv[i]
+        v_run += volumes[i]
+        if i >= window:
+            mf_run -= mfv[i - window]
+            v_run -= volumes[i - window]
+        if i >= window - 1:
+            out[i] = (mf_run / v_run) if v_run > 0 else 0.0
+    return out
+
+
+def backtest_follow_money(bars, starting_capital, vol_window=20, surge=2.0,
+                          cmf_window=20, cmf_enter=0.05, cmf_exit=-0.05,
+                          confirm=3, stop_loss_pct=0.0, take_profit_pct=0.0,
+                          trend_filter=0, cot_gate=None):
+    """
+    Long-only "follow the money" — ride visible buy-side accumulation.
+
+    Two conditions must hold together to enter, which is the whole idea:
+
+      * A big buy: this bar (or one within the last `confirm` bars) traded at
+        least `surge` x its SMA(vol_window) volume AND closed in the upper half
+        of its range, so the size was buyers lifting offers rather than sellers
+        hitting bids.
+      * Sustained accumulation: CMF(cmf_window) >= cmf_enter, meaning money has
+        been flowing in across the window rather than on that one bar.
+
+    The second condition is this toolkit's stand-in for commercial/institutional
+    acquisition. Real treasury buys, ETF creations and M&A are NOT available
+    from any data source wired up here (the TradingView bridge serves OHLCV
+    only), so persistent net accumulation across many sessions is used as the
+    observable proxy. It is a proxy, not the filing.
+
+    Exit on distribution (CMF <= cmf_exit) — the money leaving is the mirror of
+    the signal that got us in — or on the shared stop-loss/take-profit controls.
+
+    Returns the same metrics dict shape as backtest_sma_cross.
+    """
+    closes = [float(b["close"]) for b in bars]
+    volumes = [float(b.get("volume") or 0.0) for b in bars]
+    n = len(closes)
+    warmup = max(vol_window, cmf_window, trend_filter)
+    if n < warmup + 2:
+        return {"error": f"not enough bars ({n}) for windows "
+                         f"(vol {vol_window}, cmf {cmf_window}, trend {trend_filter})"}
+    if sum(volumes) <= 0:
+        return {"error": "no volume on these bars; follow_money needs volume "
+                         "(try an exchange symbol such as BITSTAMP:BTCUSD "
+                         "rather than an INDEX: feed)"}
+
+    mfv = money_flow_volume(bars)
+    cmf = chaikin_money_flow(mfv, volumes, cmf_window)
+    vol_ma = sma(volumes, vol_window)
+    trend_ma = sma(closes, trend_filter) if trend_filter else [None] * n
+
+    # A bar is a "big buy" when outsized volume arrives on the buy side.
+    big_buy = [
+        vol_ma[i] is not None and vol_ma[i] > 0
+        and volumes[i] >= surge * vol_ma[i]
+        and mfv[i] > 0
+        for i in range(n)
+    ]
+
+    cash = float(starting_capital)
+    units = 0.0
+    in_pos = False
+    entry_price = 0.0
+    trades = []
+    equity_curve = []
+
+    for i in range(n):
+        price = closes[i]
+
+        # Exits first, so a stop can fire on the same bar an entry would.
+        if in_pos:
+            exit_now = (
+                (stop_loss_pct and price <= entry_price * (1 - stop_loss_pct / 100)) or
+                (take_profit_pct and price >= entry_price * (1 + take_profit_pct / 100)) or
+                (cmf[i] is not None and cmf[i] <= cmf_exit)
+            )
+            if exit_now:
+                cash = units * price
+                trades.append((entry_price, price, (price / entry_price - 1) * 100))
+                units = 0.0
+                in_pos = False
+
+        # Entry: accumulation on the tape, with a big buy close behind it.
+        if not in_pos and cmf[i] is not None and cmf[i] >= cmf_enter:
+            recent_big = any(big_buy[max(0, i - confirm + 1):i + 1])
+            trend_ok = (not trend_filter) or (trend_ma[i] is not None and price > trend_ma[i])
+            cot_ok = cot_gate is None or cot_gate[i]
+            if recent_big and trend_ok and cot_ok:
+                units = cash / price
+                cash = 0.0
+                in_pos = True
+                entry_price = price
+
+        equity_curve.append(cash + units * price)
+
+    final_price = closes[-1]
+    final_equity = cash + units * final_price
+    if in_pos:
+        trades.append((entry_price, final_price, (final_price / entry_price - 1) * 100))
+
+    peak = equity_curve[0]
+    max_dd = 0.0
+    for e in equity_curve:
+        peak = max(peak, e)
+        if peak > 0:
+            max_dd = min(max_dd, (e / peak - 1) * 100)
+
+    wins = [t for t in trades if t[2] > 0]
+    buy_hold = (final_price / closes[0] - 1) * 100
+    live_cmf = [c for c in cmf if c is not None]
+
+    return {
+        "bars": n,
+        "from": fmt_time(bars[0].get("time")),
+        "to": fmt_time(bars[-1].get("time")),
+        "starting_capital": round(float(starting_capital), 2),
+        "final_equity": round(final_equity, 2),
+        "return_pct": round((final_equity / starting_capital - 1) * 100, 2),
+        "buy_hold_pct": round(buy_hold, 2),
+        "trades": len(trades),
+        "win_rate_pct": round(100 * len(wins) / len(trades), 1) if trades else 0.0,
+        "max_drawdown_pct": round(max_dd, 2),
+        "big_buys": sum(1 for x in big_buy if x),
+        "avg_cmf": round(sum(live_cmf) / len(live_cmf), 4) if live_cmf else 0.0,
+        "cot_gated_bars": (sum(1 for g in cot_gate if g) if cot_gate else None),
+        "strategy": _fm_label(surge, cmf_window, cmf_enter, stop_loss_pct,
+                              take_profit_pct, trend_filter,
+                              cot=bool(cot_gate)),
+    }
+
+
+def build_cot_gate(bars, market, min_change=0.0):
+    """
+    Per-bar entry gate from CFTC commercial positioning.
+
+    A bar is gated open when the most recently *released* COT report shows the
+    commercial net book rising by at least `min_change` contracts week over
+    week. Alignment uses each report's release date, not its as-of Tuesday, so
+    the backtest never sees a number before the public did.
+
+    Returns a list of bools, one per bar, or None if the market had no data.
+    """
+    from fitzz import flows
+
+    # Prefer an exact contract match. A substring cannot isolate the headline
+    # contract ("BITCOIN - CHICAGO MERCANTILE EXCHANGE" is a substring of the
+    # Micro contract's name), and CME and Micro report the same number of
+    # weeks, so picking by row count alone would be a coin flip between them.
+    raw = flows.fetch_cot(market, exact=True) or flows.fetch_cot(market)
+    rows = flows.cot_net_changes(raw)
+    if not rows:
+        return None
+    counts = {}
+    for r in rows:
+        counts[r["market"]] = counts.get(r["market"], 0) + 1
+    chosen = max(counts, key=counts.get)
+    series = sorted((r for r in rows if r["market"] == chosen),
+                    key=lambda r: r["available_from"])
+
+    gate = []
+    for b in bars:
+        ts = b.get("time")
+        day = (datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+               if isinstance(ts, (int, float)) else "")
+        live = [r for r in series if r["available_from"] <= day]
+        latest = live[-1] if live else None
+        ch = latest["comm_net_change"] if latest else None
+        gate.append(ch is not None and ch >= min_change)
+    return gate
+
+
+def _fm_label(surge, cmf_window, cmf_enter, stop_loss_pct=0.0,
+              take_profit_pct=0.0, trend_filter=0, cot=False):
+    label = f"follow_money({surge:g}xvol/cmf{cmf_window}>={cmf_enter:g})"
+    extras = []
+    if cot:
+        extras.append("cot")
+    if trend_filter:
+        extras.append(f"trend{trend_filter}")
+    if stop_loss_pct:
+        extras.append(f"sl{stop_loss_pct:g}%")
+    if take_profit_pct:
+        extras.append(f"tp{take_profit_pct:g}%")
+    return label + ("+" + "+".join(extras) if extras else "")
+
+
 def fmt_time(t):
     if t is None:
         return None
@@ -583,11 +811,23 @@ def cmd_backtest(args, bridge):
     for sym in symbols:
         try:
             bars = bridge.load_bars(sym, tv_res, capped)
-            metrics = backtest_sma_cross(
-                bars, args.starting_capital, fast=args.fast, slow=args.slow,
-                stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
-                trend_filter=args.trend_filter,
-            )
+            if args.strategy == "follow_money":
+                gate = (build_cot_gate(bars, args.fm_cot, args.fm_cot_min)
+                        if args.fm_cot else None)
+                metrics = backtest_follow_money(
+                    bars, args.starting_capital, cot_gate=gate,
+                    vol_window=args.fm_vol_window, surge=args.fm_surge,
+                    cmf_window=args.fm_cmf_window, cmf_enter=args.fm_cmf_enter,
+                    cmf_exit=args.fm_cmf_exit, confirm=args.fm_confirm,
+                    stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
+                    trend_filter=args.trend_filter,
+                )
+            else:
+                metrics = backtest_sma_cross(
+                    bars, args.starting_capital, fast=args.fast, slow=args.slow,
+                    stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
+                    trend_filter=args.trend_filter,
+                )
         except BridgeError as e:
             metrics = {"error": str(e)}
         metrics["symbol"] = sym
@@ -1598,6 +1838,11 @@ def build_parser():
     bt.add_argument("--starting-capital", type=float, default=DEFAULT_STARTING_CASH,
                     help="Starting capital for the backtest "
                          f"(default {DEFAULT_STARTING_CASH:g}).")
+    bt.add_argument("--strategy", choices=["sma_cross", "follow_money"],
+                    default="sma_cross",
+                    help="Which strategy to backtest (default sma_cross). "
+                         "follow_money rides big buy-side volume plus sustained "
+                         "accumulation.")
     bt.add_argument("--fast", type=int, default=20, help="Fast SMA window (default 20).")
     bt.add_argument("--slow", type=int, default=50, help="Slow SMA window (default 50).")
     bt.add_argument("--stop-loss", type=float, default=0.0,
@@ -1606,6 +1851,28 @@ def build_parser():
                     help="Take-profit %% above entry, e.g. 15 (default 0 = off).")
     bt.add_argument("--trend-filter", type=int, default=0,
                     help="Only go long when price > SMA(N), e.g. 200 (default 0 = off).")
+    bt.add_argument("--fm-vol-window", type=int, default=20,
+                    help="[follow_money] Baseline window for average volume (default 20).")
+    bt.add_argument("--fm-surge", type=float, default=2.0,
+                    help="[follow_money] A bar is a 'big buy' at this multiple of "
+                         "average volume (default 2.0).")
+    bt.add_argument("--fm-cmf-window", type=int, default=20,
+                    help="[follow_money] Chaikin Money Flow window (default 20).")
+    bt.add_argument("--fm-cmf-enter", type=float, default=0.05,
+                    help="[follow_money] Enter when CMF is at least this (default 0.05).")
+    bt.add_argument("--fm-cmf-exit", type=float, default=-0.05,
+                    help="[follow_money] Exit when CMF falls to this (default -0.05).")
+    bt.add_argument("--fm-confirm", type=int, default=3,
+                    help="[follow_money] A big buy must have landed within this many "
+                         "bars of entry (default 3).")
+    bt.add_argument("--fm-cot", nargs="?", const="BITCOIN - CHICAGO MERCANTILE EXCHANGE",
+                    default=None, metavar="MARKET",
+                    help="[follow_money] Also require CFTC commercial positioning to be "
+                         "rising (default market: CME Bitcoin). Weekly data, aligned on "
+                         "release date.")
+    bt.add_argument("--fm-cot-min", type=float, default=0.0,
+                    help="[follow_money] Minimum week-over-week rise in the commercial "
+                         "net book to open the gate (default 0).")
     bt.add_argument("--proven-only", action="store_true",
                     help="Keep only symbols whose backtest return > 0 with at least "
                          "--proven-min-trades trades (useful with --watchlist).")
