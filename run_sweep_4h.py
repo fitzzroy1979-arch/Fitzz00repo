@@ -18,7 +18,10 @@ a statement about statistical power, not about 4h being a better timeframe to
 trade.
 
 Bars are cached under --cache so repeat runs do not re-hit the bridge; delete
-that directory to refetch.
+that directory to refetch. A series shorter than requested is re-read once
+before being trusted, because a short read can mean a young asset or a chart
+that had not finished paging history -- and caching the latter would poison
+every run after it.
 
 Two different "win rates" appear, and they are not the same measure:
 `hit%` is the share of active BARS the winner got directionally right,
@@ -70,8 +73,9 @@ def trade_stats(bars_path, family, label, cost_bps):
     the t -> t+1 return. Costs are charged once each way.
     """
     import numpy as np
-    with open(bars_path) as fh:
-        bars = json.load(fh)
+    bars, _ = _read_cache(bars_path)      # same reader: the file carries meta
+    if not bars:
+        return None
     close = np.asarray([float(b["close"]) for b in bars], dtype=float)
 
     if family == "ma_cross":
@@ -116,18 +120,58 @@ def trade_stats(bars_path, family, label, cost_bps):
     }
 
 
-def fetch(symbol, interval, bars, cache):
-    """Bars for one symbol, from the cache if it is already there."""
-    path = os.path.join(cache, f"{symbol.replace(':', '_')}_{interval}_{bars}.json")
-    if os.path.exists(path):
+def _read_cache(path):
+    """(bars, meta) from a cache file, tolerating the old bare-list format."""
+    try:
         with open(path) as fh:
-            return path, len(json.load(fh))
-    from fitzz.trading import TradingViewBridge, resolve_interval
-    data = TradingViewBridge().load_bars(symbol, resolve_interval(interval), bars)
-    os.makedirs(cache, exist_ok=True)
+            blob = json.load(fh)
+    except (OSError, ValueError):
+        return None, {}
+    if isinstance(blob, dict):
+        return blob.get("bars") or [], blob.get("meta") or {}
+    return blob, {}                      # written before meta existed
+
+
+def _write_cache(path, bars, meta):
+    # sweep's load_json accepts {"bars": [...]}, so the meta rides along in the
+    # same file and --json can still be pointed straight at it.
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as fh:
-        json.dump(data, fh)
-    return path, len(data)
+        json.dump({"bars": bars, "meta": meta}, fh)
+
+
+def fetch(symbol, interval, bars, cache):
+    """
+    Bars for one symbol, cached.
+
+    A short series means one of two things and the count alone cannot say
+    which: the asset is young, or the TradingView chart was still paging
+    history back when it was read. Caching the second silently poisons every
+    later run, so a series shorter than asked is re-fetched once; if the
+    second read agrees it is marked confirmed and trusted from then on, and
+    if it comes back longer the longer one wins.
+    """
+    from fitzz.trading import TradingViewBridge, resolve_interval
+    path = os.path.join(cache, f"{symbol.replace(':', '_')}_{interval}_{bars}.json")
+
+    cached, meta = (_read_cache(path) if os.path.exists(path) else (None, {}))
+    if cached and (len(cached) >= bars or meta.get("confirmed")):
+        return path, len(cached)
+
+    fresh = TradingViewBridge().load_bars(symbol, resolve_interval(interval), bars)
+    if cached and len(fresh) < len(cached):
+        # A worse read than one we already hold: keep the longer series and do
+        # not confirm, so the next run checks again.
+        _write_cache(path, cached, {**meta, "asked": bars, "got": len(cached)})
+        print(f"  note: {symbol} re-read returned {len(fresh)} bars, keeping the "
+              f"cached {len(cached)}")
+        return path, len(cached)
+
+    confirmed = bool(cached) and len(fresh) == len(cached)
+    _write_cache(path, fresh, {"symbol": symbol, "interval": interval,
+                               "asked": bars, "got": len(fresh),
+                               "confirmed": confirmed})
+    return path, len(fresh)
 
 
 def sweep(bars_path, family, cost_bps, block, seed):
