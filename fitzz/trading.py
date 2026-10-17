@@ -269,16 +269,24 @@ class TradingViewBridge:
         return (len(bars), first.get("time"), first.get("close"),
                 last.get("time"), last.get("close"))
 
-    def get_ohlcv(self, count, stale_fingerprint=None):
+    def get_ohlcv(self, count, stale_fingerprint=None, expect_at_least=None):
         """Read bars, retrying while the chart is still loading.
 
         `stale_fingerprint` is the previous symbol's bar fingerprint. A read that
         matches it means the chart hadn't repainted yet, so the bars belong to
         the previous symbol -- retry rather than silently return another
         symbol's data.
+
+        `expect_at_least` is the depth ensure_history confirmed the chart holds.
+        A read returning fewer than that caught the chart mid-load: the bars are
+        real but the window is short, and a short window is indistinguishable
+        downstream from an asset with little history. Retry instead, and only
+        hand back the truncated series if it never fills in.
         """
         count = min(count, MAX_BARS)
+        want = count if expect_at_least is None else min(count, expect_at_least)
         last_err = None
+        best = None
         for attempt in range(4):
             try:
                 data = self._run(["ohlcv", "-n", str(count)])
@@ -288,15 +296,24 @@ class TradingViewBridge:
                             and self._fingerprint(bars) == stale_fingerprint):
                         last_err = "chart still showing the previous symbol's bars"
                     else:
-                        return bars
+                        if best is None or len(bars) > len(best):
+                            best = bars
+                        if len(bars) >= want:
+                            return bars
+                        last_err = (f"read {len(bars)} bars but the chart reports "
+                                    f"{expect_at_least}; still loading")
                 else:
                     last_err = "no bars returned"
             except BridgeError as e:
                 last_err = str(e)
             time.sleep(self.settle)
+        if best is not None:
+            print(f"! chart never filled in: wanted {want} bars, best read was "
+                  f"{len(best)} ({last_err}).", file=sys.stderr)
+            return best
         raise BridgeError(f"Could not read OHLCV: {last_err}")
 
-    def ensure_history(self, count, tv_resolution):
+    def ensure_history(self, count, tv_resolution, max_rounds=3):
         """Page the chart back until it holds at least `count` bars.
 
         TradingView lazy-loads roughly 300 bars per symbol and stops there, so a
@@ -324,14 +341,29 @@ class TradingViewBridge:
         # 24/7, but equities skip nights, weekends and holidays, so a bar never
         # spans less wall-clock time than its interval and usually spans more.
         frm = now - int(count * per_bar_secs * 1.6)
-        try:
-            # Paging back runs up to 25 round trips of ~1.8s inside the CLI, so
-            # this needs a far longer leash than a normal bridge call.
-            self._run(["range", "--from", str(frm), "--to", str(now)], timeout=300)
-        except BridgeError as e:
-            print(f"! could not extend chart history: {e}", file=sys.stderr)
-            return have
-        return depth()
+
+        # One `range` call is not always enough. The chart pages back in chunks
+        # and a single pass can stop short while more is still reachable, which
+        # used to be reported as "the feed only has N" -- identical to a symbol
+        # that genuinely lists recently. Repeat until the depth stops growing:
+        # that, not a short count, is what says the feed is exhausted.
+        for _ in range(max_rounds):
+            try:
+                # Paging back runs up to 25 round trips of ~1.8s inside the CLI,
+                # so this needs a far longer leash than a normal bridge call.
+                self._run(["range", "--from", str(frm), "--to", str(now)], timeout=300)
+            except BridgeError as e:
+                print(f"! could not extend chart history: {e}", file=sys.stderr)
+                return have
+            now_have = depth()
+            if now_have is None:
+                return have
+            if now_have >= count:
+                return now_have
+            if have is not None and now_have <= have:
+                return now_have          # no progress: this is all the feed has
+            have = now_have
+        return have
 
     def load_bars(self, symbol, tv_resolution, count):
         """Set symbol + timeframe, confirm the chart switched, then read bars.
@@ -355,12 +387,23 @@ class TradingViewBridge:
                 last_err = e
         else:
             raise last_err
-        self.ensure_history(count, tv_resolution)
-        bars = self.get_ohlcv(count, stale_fingerprint=stale)
+        available = self.ensure_history(count, tv_resolution)
+        bars = self.get_ohlcv(count, stale_fingerprint=stale,
+                              expect_at_least=available)
         if len(bars) < count:
-            print(f"! {symbol}: asked for {count} bars, the feed only has "
-                  f"{len(bars)}. Results cover the shorter window.",
-                  file=sys.stderr)
+            # Distinguish the two reasons a series comes back short. Paging
+            # having run to exhaustion means this really is the whole feed;
+            # anything else means the read beat the chart and the window is
+            # not what was asked for.
+            if available is not None and len(bars) >= available:
+                print(f"! {symbol}: asked for {count} bars, the feed only has "
+                      f"{len(bars)}. Results cover the shorter window.",
+                      file=sys.stderr)
+            else:
+                print(f"! {symbol}: asked for {count} bars, got {len(bars)} but "
+                      f"the chart reports {available} -- history did not finish "
+                      f"loading. Results cover a shorter window than the feed "
+                      f"can serve; rerun for the full range.", file=sys.stderr)
         self._last_bars = bars
         return bars
 
