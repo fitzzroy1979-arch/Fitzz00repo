@@ -1873,11 +1873,29 @@ def print_backtest_summary(results):
     avg_ret = sum(r["return_pct"] for r in ok) / len(ok)
     avg_bh = sum(r["buy_hold_pct"] for r in ok) / len(ok)
     best = max(ok, key=lambda r: r["return_pct"])
+
+    # The window is per symbol, not shared. This line used to print whichever
+    # symbol came back first, so adding one recent listing to a watchlist made
+    # an eight-year run report eight months. Show the span, and say plainly
+    # when the symbols do not cover the same ground -- the averages below are
+    # across those different windows and mean correspondingly little.
+    starts = sorted(r["from"] for r in ok if r.get("from"))
+    ends = sorted(r["to"] for r in ok if r.get("to"))
+    bars = [r.get("bars", 0) for r in ok]
+    if starts and starts[0] != starts[-1]:
+        window = f"windows {starts[0]} → {ends[-1]} (earliest start {starts[0]}, latest {starts[-1]})"
+    else:
+        window = f"window {starts[0]} → {ends[-1]}" if starts else "window ?"
+
     print("\n" + "─" * 60)
-    print(f"  strategy {ok[0]['strategy']}   window {ok[0]['from']} → {ok[0]['to']}")
+    print(f"  strategy {ok[0]['strategy']}   {window}")
     print(f"  avg return {avg_ret:+.2f}%   avg buy&hold {avg_bh:+.2f}%   "
           f"symbols {len(ok)}/{len(results)}")
     print(f"  best: {best['symbol']} ({best['return_pct']:+.2f}%)")
+    if bars and max(bars) >= 2 * max(1, min(bars)):
+        print(f"  ! histories differ by {max(bars) // max(1, min(bars))}x "
+              f"({min(bars)}-{max(bars)} bars). The averages above span unequal "
+              f"windows;\n    only the per-symbol rows compare like with like.")
     print("─" * 60)
 
 
