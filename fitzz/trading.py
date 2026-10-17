@@ -748,6 +748,135 @@ def backtest_follow_money(bars, starting_capital, vol_window=20, surge=2.0,
     }
 
 
+def rolling_max(values, window):
+    """Highest value over the trailing `window` bars, inclusive of this one."""
+    out = [None] * len(values)
+    if window <= 0:
+        return out
+    for i in range(window - 1, len(values)):
+        out[i] = max(values[i - window + 1:i + 1])
+    return out
+
+
+def rolling_min(values, window):
+    """Lowest value over the trailing `window` bars, inclusive of this one."""
+    out = [None] * len(values)
+    if window <= 0:
+        return out
+    for i in range(window - 1, len(values)):
+        out[i] = min(values[i - window + 1:i + 1])
+    return out
+
+
+def backtest_breakout(bars, starting_capital, entry=20, exit_bars=10,
+                      stop_loss_pct=0.0, take_profit_pct=0.0, trend_filter=0):
+    """
+    Long-only Donchian channel breakout.
+
+      * Enter when the close makes a new `entry`-bar high -- the window
+        includes the current bar, so this fires on the bar that breaks out,
+        with no look-ahead.
+      * Exit when it makes a new `exit_bars`-bar low, or on the shared
+        stop-loss / take-profit controls.
+      * trend_filter (bars): only enter when price is above SMA(trend_filter).
+
+    `exit_bars` must be shorter than `entry`: a channel that exits on the same
+    lookback it entered on flips on nearly every bar. The sweep family skips
+    those combinations for the same reason.
+
+    Returns the same metrics dict shape as backtest_sma_cross.
+    """
+    closes = [float(b["close"]) for b in bars]
+    n = len(closes)
+    if exit_bars >= entry:
+        return {"error": f"exit lookback ({exit_bars}) must be shorter than "
+                         f"entry ({entry})"}
+    warmup = max(entry, exit_bars, trend_filter)
+    if n < warmup + 2:
+        return {"error": f"not enough bars ({n}) for windows (entry {entry}, "
+                         f"exit {exit_bars}, trend {trend_filter})"}
+
+    hi = rolling_max(closes, entry)
+    lo = rolling_min(closes, exit_bars)
+    trend_ma = sma(closes, trend_filter) if trend_filter else [None] * n
+
+    cash = float(starting_capital)
+    units = 0.0
+    in_pos = False
+    entry_price = 0.0
+    trades = []
+    equity_curve = []
+
+    for i in range(n):
+        price = closes[i]
+
+        # Exits first, so a stop can fire on the same bar an entry would.
+        if in_pos:
+            exit_now = (
+                (stop_loss_pct and price <= entry_price * (1 - stop_loss_pct / 100)) or
+                (take_profit_pct and price >= entry_price * (1 + take_profit_pct / 100)) or
+                (lo[i] is not None and price <= lo[i])
+            )
+            if exit_now:
+                cash = units * price
+                trades.append((entry_price, price, (price / entry_price - 1) * 100))
+                units = 0.0
+                in_pos = False
+
+        if not in_pos and hi[i] is not None and price >= hi[i]:
+            trend_ok = (not trend_filter) or (trend_ma[i] is not None and price > trend_ma[i])
+            if trend_ok:
+                units = cash / price
+                cash = 0.0
+                in_pos = True
+                entry_price = price
+
+        equity_curve.append(cash + units * price)
+
+    final_price = closes[-1]
+    final_equity = cash + units * final_price
+    if in_pos:
+        trades.append((entry_price, final_price, (final_price / entry_price - 1) * 100))
+
+    peak = equity_curve[0]
+    max_dd = 0.0
+    for e in equity_curve:
+        peak = max(peak, e)
+        if peak > 0:
+            max_dd = min(max_dd, (e / peak - 1) * 100)
+
+    wins = [tr for tr in trades if tr[2] > 0]
+    buy_hold = (final_price / closes[0] - 1) * 100
+
+    return {
+        "bars": n,
+        "from": fmt_time(bars[0].get("time")),
+        "to": fmt_time(bars[-1].get("time")),
+        "starting_capital": round(float(starting_capital), 2),
+        "final_equity": round(final_equity, 2),
+        "return_pct": round((final_equity / starting_capital - 1) * 100, 2),
+        "buy_hold_pct": round(buy_hold, 2),
+        "trades": len(trades),
+        "win_rate_pct": round(100 * len(wins) / len(trades), 1) if trades else 0.0,
+        "max_drawdown_pct": round(max_dd, 2),
+        "strategy": _breakout_label(entry, exit_bars, stop_loss_pct,
+                                    take_profit_pct, trend_filter),
+    }
+
+
+def _breakout_label(entry, exit_bars, stop_loss_pct=0.0, take_profit_pct=0.0,
+                    trend_filter=0):
+    label = f"breakout({entry}/{exit_bars})"
+    extras = []
+    if trend_filter:
+        extras.append(f"trend{trend_filter}")
+    if stop_loss_pct:
+        extras.append(f"sl{stop_loss_pct:g}%")
+    if take_profit_pct:
+        extras.append(f"tp{take_profit_pct:g}%")
+    return label + ("+" + "+".join(extras) if extras else "")
+
+
 def build_cot_gate(bars, market, min_change=0.0):
     """
     Per-bar entry gate from CFTC commercial positioning.
@@ -862,6 +991,13 @@ def cmd_backtest(args, bridge):
                     vol_window=args.fm_vol_window, surge=args.fm_surge,
                     cmf_window=args.fm_cmf_window, cmf_enter=args.fm_cmf_enter,
                     cmf_exit=args.fm_cmf_exit, confirm=args.fm_confirm,
+                    stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
+                    trend_filter=args.trend_filter,
+                )
+            elif args.strategy == "breakout":
+                metrics = backtest_breakout(
+                    bars, args.starting_capital,
+                    entry=args.bo_entry, exit_bars=args.bo_exit,
                     stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
                     trend_filter=args.trend_filter,
                 )
@@ -1881,11 +2017,11 @@ def build_parser():
     bt.add_argument("--starting-capital", type=float, default=DEFAULT_STARTING_CASH,
                     help="Starting capital for the backtest "
                          f"(default {DEFAULT_STARTING_CASH:g}).")
-    bt.add_argument("--strategy", choices=["sma_cross", "follow_money"],
+    bt.add_argument("--strategy", choices=["sma_cross", "follow_money", "breakout"],
                     default="sma_cross",
                     help="Which strategy to backtest (default sma_cross). "
                          "follow_money rides big buy-side volume plus sustained "
-                         "accumulation.")
+                         "accumulation; breakout is a long-only Donchian channel.")
     bt.add_argument("--fast", type=int, default=20, help="Fast SMA window (default 20).")
     bt.add_argument("--slow", type=int, default=50, help="Slow SMA window (default 50).")
     bt.add_argument("--stop-loss", type=float, default=0.0,
@@ -1894,6 +2030,11 @@ def build_parser():
                     help="Take-profit %% above entry, e.g. 15 (default 0 = off).")
     bt.add_argument("--trend-filter", type=int, default=0,
                     help="Only go long when price > SMA(N), e.g. 200 (default 0 = off).")
+    bt.add_argument("--bo-entry", type=int, default=20,
+                    help="[breakout] Enter on a new high over this many bars (default 20).")
+    bt.add_argument("--bo-exit", type=int, default=10,
+                    help="[breakout] Exit on a new low over this many bars; must be "
+                         "shorter than --bo-entry (default 10).")
     bt.add_argument("--fm-vol-window", type=int, default=20,
                     help="[follow_money] Baseline window for average volume (default 20).")
     bt.add_argument("--fm-surge", type=float, default=2.0,

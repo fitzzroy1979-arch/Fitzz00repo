@@ -9,6 +9,7 @@ strategy family over each, and prints the corrected p-values side by side.
     python3 run_sweep_4h.py --symbols BITSTAMP:BTCUSD,COINBASE:XRPUSD
     python3 run_sweep_4h.py --interval 1d --bars 3000
     python3 run_sweep_4h.py --family ma_cross  # just one family
+                                               # (ma_cross, breakout, follow_money)
 
 Why 4h rather than daily: a sweep can only score a config that trades enough
 to clear --min-trades. On daily bars follow_money fires 2-4 times a year, so
@@ -52,6 +53,7 @@ DEFAULT_SYMBOLS = [
 ]
 FAMILIES = {
     "ma_cross": ["--family", "ma_cross", "--long-only"],
+    "breakout": ["--family", "breakout", "--long-only"],
     "follow_money": ["--strategy", "fitzz/fm_family.py:build"],
 }
 REPO = os.path.dirname(os.path.abspath(__file__))
@@ -59,6 +61,7 @@ REPO = os.path.dirname(os.path.abspath(__file__))
 # Mirrors fitzz.sweep's own argparse defaults; rebuilding the winning config
 # means reusing the same grid the sweep searched.
 MA_DEFAULTS = ("2:40:2", "10:200:5", "0,0.001,0.0025,0.005,0.01")
+BREAKOUT_DEFAULTS = ("10:120:5", "5:60:5")
 
 
 def trade_stats(bars_path, family, label, cost_bps):
@@ -86,6 +89,11 @@ def trade_stats(bars_path, family, label, cost_bps):
         s = [int(v) for v in parse_range(MA_DEFAULTS[1])]
         th = [float(v) for v in parse_range(MA_DEFAULTS[2])]
         pos, labels, _ = ma_cross_family(close, f, s, th, True)
+    elif family == "breakout":
+        from fitzz.sweep import breakout_family, parse_range
+        e = [int(v) for v in parse_range(BREAKOUT_DEFAULTS[0])]
+        x = [int(v) for v in parse_range(BREAKOUT_DEFAULTS[1])]
+        pos, labels, _ = breakout_family(close, e, x, True)
     else:
         from fitzz.fm_family import build
         pos, labels = build(close, bars)
