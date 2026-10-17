@@ -375,21 +375,47 @@ class TradingViewBridge:
         stale = self._fingerprint(self._last_bars)
         # A busy or still-warming chart can drop the first `symbol` command, so
         # re-issue it before giving up -- the first symbol after a cold start is
-        # the usual victim.
+        # the usual victim. The whole switch-and-read is inside the retry,
+        # because the read is where a half-finished switch actually shows up.
         last_err = None
+        bars = available = None
         for attempt in range(3):
             self.set_symbol(symbol)
             self.set_timeframe(tv_resolution)
             try:
                 self.wait_for_chart(symbol, tv_resolution)
-                break
             except BridgeError as e:
                 last_err = e
-        else:
+                continue
+            available = self.ensure_history(count, tv_resolution)
+            candidate = self.get_ohlcv(count, stale_fingerprint=stale,
+                                       expect_at_least=available)
+            if self._prices_agree(symbol, candidate):
+                bars = candidate
+                break
+            last_err = BridgeError(
+                f"{symbol}: bars do not match this symbol's quote (last bar "
+                f"{candidate[-1].get('close') if candidate else None}). The "
+                f"chart reported the switch before its data caught up.")
+            time.sleep(self.settle)
+        if bars is None:
             raise last_err
-        available = self.ensure_history(count, tv_resolution)
-        bars = self.get_ohlcv(count, stale_fingerprint=stale,
-                              expect_at_least=available)
+
+        # Confirm the bars belong to this symbol, not the last one.
+        #
+        # wait_for_chart above only proves the chart *reports* the new symbol,
+        # and TradingView sets that property as soon as the switch is accepted,
+        # before the series repaints. The fingerprint guard in get_ohlcv is the
+        # other backstop, but it compares against a single previous read, and
+        # ensure_history's paging changes the bar count enough that stale bars
+        # no longer match it. Both can pass on another symbol's data: a 4h CC
+        # read came back holding BTC's series, which is only obvious because
+        # the prices differ by six orders of magnitude.
+        #
+        # So compare the last bar against a live quote for the symbol asked
+        # for. The band is deliberately wide -- the last bar may be hours old
+        # and crypto moves -- because this is here to catch a different
+        # instrument, not to police a few percent.
         if len(bars) < count:
             # Distinguish the two reasons a series comes back short. Paging
             # having run to exhaustion means this really is the whole feed;
@@ -406,6 +432,32 @@ class TradingViewBridge:
                       f"can serve; rerun for the full range.", file=sys.stderr)
         self._last_bars = bars
         return bars
+
+    def _quote_price(self, symbol):
+        """Live price for `symbol`, or None if the bridge will not say."""
+        q = self.get_quote(symbol) or {}
+        for k in ("price", "last", "close", "lp"):
+            v = q.get(k)
+            if isinstance(v, (int, float)) and v > 0:
+                return float(v)
+        return None
+
+    def _prices_agree(self, symbol, bars, lo=0.5, hi=2.0):
+        """
+        Is this series plausibly the one `symbol` trades at?
+
+        Compares the last bar's close against a live quote. Returns True when
+        no quote is available -- an unverifiable read should not be treated as
+        a failed one.
+        """
+        if not bars:
+            return True
+        price = self._quote_price(symbol)
+        last = bars[-1].get("close")
+        if price is None or not isinstance(last, (int, float)) or last <= 0:
+            return True
+        ratio = float(last) / price
+        return lo <= ratio <= hi
 
     def get_quote(self, symbol):
         try:

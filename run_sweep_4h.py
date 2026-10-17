@@ -58,6 +58,50 @@ FAMILIES = {
 }
 REPO = os.path.dirname(os.path.abspath(__file__))
 
+# One bridge for the whole run, not one per symbol. TradingViewBridge keeps the
+# previous read on the instance and refuses a new one whose bars are identical
+# to it -- that is the guard against the chart not having repainted yet, and
+# constructing a fresh bridge per fetch silently disables it, because the
+# fingerprint it compares against is always None. Doing that crossed six
+# symbols' caches: a 4h XRP file ended up holding FLR's daily series.
+_BRIDGE = None
+
+
+def _bridge():
+    global _BRIDGE
+    if _BRIDGE is None:
+        from fitzz.trading import TradingViewBridge
+        _BRIDGE = TradingViewBridge()
+    return _BRIDGE
+
+
+# Seconds per bar, to check a fetched series is on the interval it claims.
+_INTERVAL_SECS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800,
+                  "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400,
+                  "1w": 604800}
+
+
+def _spacing_ok(bars, interval):
+    """
+    Does this series actually step at `interval`?
+
+    Catches a whole class of mix-up that a bar count cannot: a daily series
+    written into a 4h cache file looks perfectly healthy until its results
+    make no sense. Uses the median gap, so listing halts and feed outages do
+    not trip it.
+    """
+    want = _INTERVAL_SECS.get(interval)
+    if not want or len(bars) < 10:
+        return True, None
+    gaps = sorted(b2["time"] - b1["time"]
+                  for b1, b2 in zip(bars, bars[1:])
+                  if isinstance(b1.get("time"), (int, float))
+                  and isinstance(b2.get("time"), (int, float)))
+    if not gaps:
+        return True, None
+    median = gaps[len(gaps) // 2]
+    return abs(median - want) <= want * 0.25, median
+
 # Mirrors fitzz.sweep's own argparse defaults; rebuilding the winning config
 # means reusing the same grid the sweep searched.
 MA_DEFAULTS = ("2:40:2", "10:200:5", "0,0.001,0.0025,0.005,0.01")
@@ -159,14 +203,25 @@ def fetch(symbol, interval, bars, cache):
     second read agrees it is marked confirmed and trusted from then on, and
     if it comes back longer the longer one wins.
     """
-    from fitzz.trading import TradingViewBridge, resolve_interval
+    from fitzz.trading import resolve_interval
     path = os.path.join(cache, f"{symbol.replace(':', '_')}_{interval}_{bars}.json")
 
     cached, meta = (_read_cache(path) if os.path.exists(path) else (None, {}))
+    if cached:
+        ok, median = _spacing_ok(cached, interval)
+        if not ok:
+            print(f"  note: cached {symbol} steps {median}s, not {interval} — "
+                  f"discarding and refetching")
+            cached, meta = None, {}
     if cached and (len(cached) >= bars or meta.get("confirmed")):
         return path, len(cached)
 
-    fresh = TradingViewBridge().load_bars(symbol, resolve_interval(interval), bars)
+    fresh = _bridge().load_bars(symbol, resolve_interval(interval), bars)
+    ok, median = _spacing_ok(fresh, interval)
+    if not ok:
+        raise RuntimeError(
+            f"{symbol}: fetched series steps {median}s but {interval} was asked "
+            f"for — the chart was on another timeframe. Not caching this.")
     if cached and len(fresh) < len(cached):
         # A worse read than one we already hold: keep the longer series and do
         # not confirm, so the next run checks again.
