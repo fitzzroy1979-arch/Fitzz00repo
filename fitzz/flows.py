@@ -485,6 +485,21 @@ def main(argv=None):
     try:
         if args.cot:
             rows = fetch_cot(args.cot, since=args.since, exact=args.exact)
+            if not rows and args.exact:
+                # An exact match that finds nothing is nearly always a name a
+                # word short -- "BITCOIN - CHICAGO MERCANTILE" for "... EXCHANGE".
+                # Show what the same text matches loosely so the full name is
+                # one copy-paste away instead of a guess.
+                near = fetch_cot(args.cot, since=args.since, limit=400)
+                names = sorted({r["market"] for r in near if r.get("market")})
+                if names:
+                    print(f"\nNo contract is named exactly {args.cot!r}. "
+                          f"These contain it:")
+                    for n in names:
+                        print(f"  {n}")
+                    print("\n  Pass one of those verbatim with --exact, or drop "
+                          "--exact to match them all.")
+                    return payload
             payload["cot"] = rows
             if not args.json:
                 _print_cot(rows, args.cot, limit=args.limit)
