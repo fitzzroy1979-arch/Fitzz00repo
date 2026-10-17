@@ -615,6 +615,285 @@ def sma(values, window):
     return out
 
 
+def _apply_risk(positions, closes, stop_loss_pct, take_profit_pct):
+    """
+    Walk a position series and cut any leg that hits its stop or target.
+
+    Applied after the signal has spoken, so every strategy gets the same risk
+    controls without each reimplementing them, and shorts are handled by the
+    same code -- a short's stop is a rise, its target a fall.
+    """
+    if not (stop_loss_pct or take_profit_pct):
+        return positions
+    out = list(positions)
+    entry = None
+    side = 0
+    for i, px in enumerate(closes):
+        if out[i] != side:
+            side, entry = out[i], px
+            continue
+        if side and entry:
+            move = (px / entry - 1.0) * side * 100
+            if (stop_loss_pct and move <= -stop_loss_pct) or \
+               (take_profit_pct and move >= take_profit_pct):
+                # flat until the signal itself changes, so a stopped-out leg
+                # is not immediately re-entered on the very next bar
+                j = i
+                while j < len(out) and out[j] == side:
+                    out[j] = 0
+                    j += 1
+                side, entry = 0, None
+    return out
+
+
+def sma_cross_positions(bars, fast=20, slow=50, trend_filter=0, allow_shorts=False):
+    """+1 on a cross up, -1 on a cross down when shorts are on, else flat."""
+    closes = [float(b["close"]) for b in bars]
+    n = len(closes)
+    f, s = sma(closes, fast), sma(closes, slow)
+    tm = sma(closes, trend_filter) if trend_filter else [None] * n
+    pos, state = [], 0
+    for i in range(n):
+        ready = all(x is not None for x in (f[i], s[i], f[i - 1], s[i - 1])) if i else False
+        if ready:
+            up = f[i - 1] <= s[i - 1] and f[i] > s[i]
+            down = f[i - 1] >= s[i - 1] and f[i] < s[i]
+            if up:
+                ok = (not trend_filter) or (tm[i] is not None and closes[i] > tm[i])
+                state = 1 if ok else 0
+            elif down:
+                state = -1 if allow_shorts else 0
+        pos.append(state)
+    return pos
+
+
+def breakout_positions(bars, entry=20, exit_bars=10, trend_filter=0, allow_shorts=False):
+    """Donchian: +1 on a new entry-bar high, -1 on a new entry-bar low."""
+    closes = [float(b["close"]) for b in bars]
+    n = len(closes)
+    hi, lo = rolling_max(closes, entry), rolling_min(closes, entry)
+    xhi, xlo = rolling_max(closes, exit_bars), rolling_min(closes, exit_bars)
+    tm = sma(closes, trend_filter) if trend_filter else [None] * n
+    pos, state = [], 0
+    for i in range(n):
+        px = closes[i]
+        if state > 0 and xlo[i] is not None and px <= xlo[i]:
+            state = 0
+        elif state < 0 and xhi[i] is not None and px >= xhi[i]:
+            state = 0
+        if state == 0:
+            if hi[i] is not None and px >= hi[i]:
+                ok = (not trend_filter) or (tm[i] is not None and px > tm[i])
+                state = 1 if ok else 0
+            elif allow_shorts and lo[i] is not None and px <= lo[i]:
+                state = -1
+        pos.append(state)
+    return pos
+
+
+def mean_revert_positions(bars, window=20, entry_z=-2.0, exit_z=0.0, max_hold=0,
+                          trend_filter=0, allow_shorts=False):
+    """+1 when stretched below the mean, -1 when stretched above it."""
+    closes = [float(b["close"]) for b in bars]
+    n = len(closes)
+    z = zscore(closes, window)
+    tm = sma(closes, trend_filter) if trend_filter else [None] * n
+    pos, state, entry_i = [], 0, 0
+    for i in range(n):
+        if state > 0 and ((z[i] is not None and z[i] >= exit_z)
+                          or (max_hold and i - entry_i >= max_hold)):
+            state = 0
+        elif state < 0 and ((z[i] is not None and z[i] <= -exit_z)
+                            or (max_hold and i - entry_i >= max_hold)):
+            state = 0
+        if state == 0 and z[i] is not None:
+            if z[i] <= entry_z:
+                ok = (not trend_filter) or (tm[i] is not None and closes[i] > tm[i])
+                if ok:
+                    state, entry_i = 1, i
+            elif allow_shorts and z[i] >= -entry_z:
+                state, entry_i = -1, i
+        pos.append(state)
+    return pos
+
+
+def follow_money_positions(bars, vol_window=20, surge=2.0, cmf_window=20,
+                           cmf_enter=0.05, cmf_exit=-0.05, confirm=3,
+                           trend_filter=0, allow_shorts=False, cot_gate=None):
+    """
+    +1 on a big buy into accumulation; -1 on a big sell into distribution.
+
+    The short is the exact mirror: outsized volume closing in the LOWER half
+    of the bar's range (sellers hitting bids) while money has been leaving
+    over the window.
+    """
+    closes = [float(b["close"]) for b in bars]
+    volumes = [float(b.get("volume") or 0.0) for b in bars]
+    n = len(closes)
+    mfv = money_flow_volume(bars)
+    cmf = chaikin_money_flow(mfv, volumes, cmf_window)
+    vma = sma(volumes, vol_window)
+    tm = sma(closes, trend_filter) if trend_filter else [None] * n
+    big_buy = [vma[i] is not None and vma[i] > 0 and volumes[i] >= surge * vma[i]
+               and mfv[i] > 0 for i in range(n)]
+    big_sell = [vma[i] is not None and vma[i] > 0 and volumes[i] >= surge * vma[i]
+                and mfv[i] < 0 for i in range(n)]
+    pos, state = [], 0
+    for i in range(n):
+        c = cmf[i]
+        if state > 0 and c is not None and c <= cmf_exit:
+            state = 0
+        elif state < 0 and c is not None and c >= -cmf_exit:
+            state = 0
+        if state == 0 and c is not None:
+            lo = max(0, i - confirm + 1)
+            if c >= cmf_enter and any(big_buy[lo:i + 1]):
+                ok = (not trend_filter) or (tm[i] is not None and closes[i] > tm[i])
+                if ok and (cot_gate is None or cot_gate[i]):
+                    state = 1
+            elif allow_shorts and c <= -cmf_enter and any(big_sell[lo:i + 1]):
+                state = -1
+        pos.append(state)
+    return pos
+
+
+def confluence_positions(bars, require=5, exit_below=2, allow_shorts=False, **kw):
+    """
+    +1 when `require` of the five bullish conditions agree.
+
+    The short side mirrors each condition: below a falling average, RSI in
+    the weak band, the same direction-neutral squeeze, heavy volume with
+    money leaving, and price in the UPPER half of its range -- a failed
+    bounce rather than a pullback.
+    """
+    counts, _ = confluence_flags(bars, **kw)
+    bear = None
+    if allow_shorts:
+        bear = _bear_confluence_counts(bars, **kw)
+    pos, state = [], 0
+    for i in range(len(counts)):
+        if state > 0 and counts[i] < exit_below:
+            state = 0
+        elif state < 0 and bear is not None and bear[i] < exit_below:
+            state = 0
+        if state == 0:
+            if counts[i] >= require:
+                state = 1
+            elif bear is not None and bear[i] >= require:
+                state = -1
+        pos.append(state)
+    return pos
+
+
+def _bear_confluence_counts(bars, trend=200, trend_slope=20, rsi_window=14,
+                            rsi_lo=45.0, rsi_hi=70.0, bb_window=20,
+                            bb_lookback=100, squeeze_pct=0.35, vol_window=20,
+                            vol_mult=1.2, cmf_window=20, range_window=20,
+                            location_max=0.5):
+    """The five conditions with every directional one inverted."""
+    closes = [float(b["close"]) for b in bars]
+    volumes = [float(b.get("volume") or 0.0) for b in bars]
+    n = len(closes)
+    tm = sma(closes, trend)
+    r = rsi(closes, rsi_window)
+    bwr = percentile_rank(bollinger_bandwidth(closes, bb_window), bb_lookback)
+    vma = sma(volumes, vol_window)
+    cmf = chaikin_money_flow(money_flow_volume(bars), volumes, cmf_window)
+    hi, lo = rolling_max(closes, range_window), rolling_min(closes, range_window)
+    out = []
+    for i in range(n):
+        falling = (tm[i] is not None and i >= trend_slope
+                   and tm[i - trend_slope] is not None and tm[i] < tm[i - trend_slope])
+        rng = (hi[i] - lo[i]) if (hi[i] is not None and lo[i] is not None) else None
+        where = ((closes[i] - lo[i]) / rng) if rng else None
+        out.append(sum([
+            tm[i] is not None and closes[i] < tm[i] and falling,
+            r[i] is not None and (100 - rsi_hi) <= r[i] <= (100 - rsi_lo),
+            bwr[i] is not None and bwr[i] <= squeeze_pct,
+            (vma[i] is not None and vma[i] > 0 and volumes[i] >= vol_mult * vma[i]
+             and cmf[i] is not None and cmf[i] < 0),
+            where is not None and where >= (1.0 - location_max),
+        ]))
+    return out
+
+
+def position_metrics(bars, positions, starting_capital, label, cost_bps=0.0):
+    """
+    Score a position series. +1 long, 0 flat, -1 short, held into the next bar.
+
+    Every strategy here reduces to "what was the exposure on bar i", so they
+    all share this. Two things follow from that. Shorts cost nothing extra to
+    support -- a -1 simply earns the inverse of the bar's return. And the
+    backtest can no longer disagree with the sweep about what a position is
+    worth, since both now compound the same way.
+
+    Equity compounds by exposure times the bar return, which for a long-only
+    series is identical to the buy-everything-sell-everything accounting it
+    replaces. A round turn is charged 2 * cost_bps on the way in and out.
+
+    A trade is one stretch of non-zero exposure; flipping long to short
+    without passing through flat closes one and opens the next.
+    """
+    closes = [float(b["close"]) for b in bars]
+    n = len(closes)
+    fee = cost_bps * 1e-4
+
+    equity = float(starting_capital)
+    curve = []
+    trades = []
+    entry_price = None
+    entry_side = 0
+
+    for i in range(n):
+        side = positions[i]
+        if i > 0 and positions[i - 1] != 0:
+            r = closes[i] / closes[i - 1] - 1.0
+            equity *= (1.0 + positions[i - 1] * r)
+        # a change of exposure closes whatever was open and pays the spread
+        if i > 0 and side != positions[i - 1]:
+            if positions[i - 1] != 0 and entry_price:
+                px = closes[i]
+                ret = (px / entry_price - 1.0) * 100 * entry_side
+                trades.append(ret)
+                equity *= (1.0 - fee)
+            if side != 0:
+                entry_price, entry_side = closes[i], side
+                equity *= (1.0 - fee)
+        elif i == 0 and side != 0:
+            entry_price, entry_side = closes[i], side
+            equity *= (1.0 - fee)
+        curve.append(equity)
+
+    if positions and positions[-1] != 0 and entry_price:
+        trades.append((closes[-1] / entry_price - 1.0) * 100 * entry_side)
+
+    peak = curve[0] if curve else starting_capital
+    max_dd = 0.0
+    for e in curve:
+        peak = max(peak, e)
+        if peak > 0:
+            max_dd = min(max_dd, (e / peak - 1) * 100)
+
+    wins = [x for x in trades if x > 0]
+    shorts = sum(1 for i in range(n) if positions[i] < 0)
+    buy_hold = (closes[-1] / closes[0] - 1) * 100
+
+    return {
+        "bars": n,
+        "from": fmt_time(bars[0].get("time")),
+        "to": fmt_time(bars[-1].get("time")),
+        "starting_capital": round(float(starting_capital), 2),
+        "final_equity": round(equity, 2),
+        "return_pct": round((equity / starting_capital - 1) * 100, 2),
+        "buy_hold_pct": round(buy_hold, 2),
+        "trades": len(trades),
+        "win_rate_pct": round(100 * len(wins) / len(trades), 1) if trades else 0.0,
+        "max_drawdown_pct": round(max_dd, 2),
+        "short_bars": shorts,
+        "strategy": label,
+    }
+
+
 def backtest_sma_cross(bars, starting_capital, fast=20, slow=50,
                        stop_loss_pct=0.0, take_profit_pct=0.0, trend_filter=0):
     """
@@ -1497,46 +1776,53 @@ def cmd_backtest(args, bridge):
     for sym in symbols:
         try:
             bars = bridge.load_bars(sym, tv_res, capped)
+            short = args.allow_shorts
             if args.strategy == "follow_money":
                 gate = (build_cot_gate(bars, args.fm_cot, args.fm_cot_min)
                         if args.fm_cot else None)
-                metrics = backtest_follow_money(
-                    bars, args.starting_capital, cot_gate=gate,
-                    vol_window=args.fm_vol_window, surge=args.fm_surge,
+                pos = follow_money_positions(
+                    bars, vol_window=args.fm_vol_window, surge=args.fm_surge,
                     cmf_window=args.fm_cmf_window, cmf_enter=args.fm_cmf_enter,
                     cmf_exit=args.fm_cmf_exit, confirm=args.fm_confirm,
-                    stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
-                    trend_filter=args.trend_filter,
-                )
+                    trend_filter=args.trend_filter, allow_shorts=short,
+                    cot_gate=gate)
+                label = _fm_label(args.fm_surge, args.fm_cmf_window,
+                                  args.fm_cmf_enter, args.stop_loss,
+                                  args.take_profit, args.trend_filter,
+                                  cot=bool(gate))
             elif args.strategy == "confluence":
-                metrics = backtest_confluence(
-                    bars, args.starting_capital,
-                    require=args.conf_require, exit_below=args.conf_exit,
-                    trend=args.conf_trend, vol_mult=args.conf_vol_mult,
-                    squeeze_pct=args.conf_squeeze, location_max=args.conf_location,
-                    stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
-                )
+                pos = confluence_positions(
+                    bars, require=args.conf_require, exit_below=args.conf_exit,
+                    allow_shorts=short, trend=args.conf_trend,
+                    vol_mult=args.conf_vol_mult, squeeze_pct=args.conf_squeeze,
+                    location_max=args.conf_location)
+                label = _conf_label(args.conf_require, args.conf_exit,
+                                    args.stop_loss, args.take_profit)
             elif args.strategy == "mean_revert":
-                metrics = backtest_mean_revert(
-                    bars, args.starting_capital,
-                    window=args.mr_window, entry_z=args.mr_entry_z,
+                pos = mean_revert_positions(
+                    bars, window=args.mr_window, entry_z=args.mr_entry_z,
                     exit_z=args.mr_exit_z, max_hold=args.mr_max_hold,
-                    stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
-                    trend_filter=args.trend_filter,
-                )
+                    trend_filter=args.trend_filter, allow_shorts=short)
+                label = _mr_label(args.mr_window, args.mr_entry_z, args.mr_exit_z,
+                                  args.mr_max_hold, args.stop_loss,
+                                  args.take_profit, args.trend_filter)
             elif args.strategy == "breakout":
-                metrics = backtest_breakout(
-                    bars, args.starting_capital,
-                    entry=args.bo_entry, exit_bars=args.bo_exit,
-                    stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
-                    trend_filter=args.trend_filter,
-                )
+                pos = breakout_positions(
+                    bars, entry=args.bo_entry, exit_bars=args.bo_exit,
+                    trend_filter=args.trend_filter, allow_shorts=short)
+                label = _breakout_label(args.bo_entry, args.bo_exit,
+                                        args.stop_loss, args.take_profit,
+                                        args.trend_filter)
             else:
-                metrics = backtest_sma_cross(
-                    bars, args.starting_capital, fast=args.fast, slow=args.slow,
-                    stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
-                    trend_filter=args.trend_filter,
-                )
+                pos = sma_cross_positions(
+                    bars, fast=args.fast, slow=args.slow,
+                    trend_filter=args.trend_filter, allow_shorts=short)
+                label = _strategy_label(args.fast, args.slow, args.stop_loss,
+                                        args.take_profit, args.trend_filter)
+            closes = [float(b["close"]) for b in bars]
+            pos = _apply_risk(pos, closes, args.stop_loss, args.take_profit)
+            metrics = position_metrics(bars, pos, args.starting_capital,
+                                       label + ("+short" if short else ""))
         except BridgeError as e:
             metrics = {"error": str(e)}
         metrics["symbol"] = sym
@@ -2564,6 +2850,9 @@ def build_parser():
                     help="Take-profit %% above entry, e.g. 15 (default 0 = off).")
     bt.add_argument("--trend-filter", type=int, default=0,
                     help="Only go long when price > SMA(N), e.g. 200 (default 0 = off).")
+    bt.add_argument("--allow-shorts", action="store_true",
+                    help="Let every strategy take the mirror-image short as well "
+                         "as the long (default long-only).")
     bt.add_argument("--conf-require", type=int, default=5,
                     help="[confluence] How many of the five conditions must agree "
                          "to enter (default 5).")
