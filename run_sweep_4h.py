@@ -299,6 +299,46 @@ def sweep(bars_path, family, cost_bps, block, seed, shorts=False):
             os.unlink(out_path)
 
 
+def cost_scan(bars_path, family, levels, block, seed, shorts, holdout=0.33):
+    """
+    Re-run one sweep across a range of transaction costs.
+
+    The question this answers is more useful than a p-value: at what cost
+    does the edge stop existing? A winner that needs 10bps round-turn on an
+    illiquid pair is disqualified by the spread it will actually pay, and
+    that is a fact about the market rather than about the test. It is also
+    cheaper to check than anything else here, so it belongs early.
+
+    Each level is run with a holdout, because an edge that survives costs
+    in sample and dies out of sample is still nothing.
+    """
+    import re
+    rows = []
+    for bps in levels:
+        cmd = [sys.executable, "-m", "fitzz", "sweep", "--json", bars_path,
+               *(FAMILIES_SHORT if shorts else FAMILIES)[family],
+               "--objective", "return", "--cost-bps", str(bps),
+               "--holdout", str(holdout), "--seed", str(seed)]
+        if block:
+            cmd += ["--block", str(block)]
+        out = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO).stdout
+        cfg = re.search(r"^\s{4}(\S.*?)\s*$", out, re.M)
+        hold = re.search(r"mean ([+-][\d.]+) vs ([+-][\d.]+) in-sample", out)
+        spa = re.search(r"SPA, corrected \+ studentized\s+:\s+([\d.]+)", out)
+        rc = re.search(r"Reality Check, corrected for the search\s+:\s+([\d.]+)", out)
+        lbl = re.search(r"^\s+((?:ma_cross|breakout|follow_money|mean_revert|confluence)[^\n]*)",
+                        out, re.M)
+        rows.append({
+            "bps": bps,
+            "config": (lbl.group(1).strip() if lbl else "?"),
+            "in_sample": float(hold.group(2)) if hold else None,
+            "holdout": float(hold.group(1)) if hold else None,
+            "p_spa": float(spa.group(1)) if spa else None,
+            "p_rc": float(rc.group(1)) if rc else None,
+        })
+    return rows
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -313,6 +353,9 @@ def main(argv=None):
                    help="cost per unit turnover (default 10)")
     p.add_argument("--block", type=int, default=None,
                    help="bootstrap block length; default lets the tool choose")
+    p.add_argument("--cost-scan", default=None, metavar="BPS,BPS,...",
+                   help="Instead of one sweep, re-run it at each cost level with a "
+                        "holdout, and report where the edge stops surviving.")
     p.add_argument("--shorts", action="store_true",
                    help="Let every family take the mirror-image short as well as "
                         "the long (default long-only).")
@@ -323,6 +366,40 @@ def main(argv=None):
 
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
     families = args.family or sorted(FAMILIES)
+
+    if args.cost_scan:
+        levels = [float(x) for x in args.cost_scan.split(",") if x.strip()]
+        for sym in symbols:
+            try:
+                path, n = fetch(sym, args.interval, args.bars, args.cache)
+            except Exception as e:
+                print(f"{sym}: fetch failed: {str(e)[:60]}")
+                continue
+            for fam in families:
+                print(f"\n{sym}  {fam}{'  (shorts)' if args.shorts else ''}  "
+                      f"{args.interval}  {n} bars")
+                print(f"  {'bps':>5}{'in-sample':>12}{'holdout':>12}"
+                      f"{'p(SPA)':>9}{'p(RC)':>8}  winning config")
+                dead = None
+                for r in cost_scan(path, fam, levels, args.block, args.seed,
+                                   args.shorts):
+                    ins = f"{r['in_sample']:+.6f}" if r["in_sample"] is not None else "-"
+                    hld = f"{r['holdout']:+.6f}" if r["holdout"] is not None else "-"
+                    spa = f"{r['p_spa']:.3f}" if r["p_spa"] is not None else "-"
+                    rc = f"{r['p_rc']:.3f}" if r["p_rc"] is not None else "-"
+                    print(f"  {r['bps']:>5.0f}{ins:>12}{hld:>12}{spa:>9}{rc:>8}  "
+                          f"{r['config'][:44]}")
+                    if dead is None and r["p_spa"] is not None and r["p_spa"] > 0.05:
+                        dead = r["bps"]
+                if dead is not None:
+                    print(f"\n  significance is gone by {dead:.0f} bps. If the real "
+                          f"round-turn cost on this\n  instrument is at or above "
+                          f"that, the edge is not tradable whatever the\n  p-value "
+                          f"says at a cost you will not get.")
+                else:
+                    print("\n  survives every cost level tested -- worth raising the "
+                          "range.")
+        return 0
 
     print(f"{'symbol':<20}{'family':<14}{'bars':>6}{'cfgs':>7}{'trades':>7}"
           f"{'hit%':>7}{'win%':>7}{'avgW%':>7}{'avgL%':>7}"
