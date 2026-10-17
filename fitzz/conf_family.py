@@ -16,7 +16,7 @@ strictness buys anything or merely starves the strategy of trades.
 
 import numpy as np
 
-from fitzz.trading import confluence_flags
+from fitzz.trading import confluence_positions
 
 REQUIRE = (3, 4, 5)
 EXIT_BELOW = (1, 2, 3)
@@ -25,32 +25,29 @@ LOCATION = (0.5, 0.8)
 RSI_BANDS = ((45.0, 70.0), (40.0, 80.0))
 
 
-def build(close, bars):
-    """Return (positions (T, K), labels) over the confluence grid."""
-    n = len(bars)
-    cache = {}
+def _grid(close, bars, allow_shorts):
+    cols, labels = [], []
     for sq in SQUEEZE:
         for loc in LOCATION:
             for lo, hi in RSI_BANDS:
-                cache[(sq, loc, lo, hi)] = confluence_flags(
-                    bars, squeeze_pct=sq, location_max=loc,
-                    rsi_lo=lo, rsi_hi=hi)[0]
-
-    cols, labels = [], []
-    for (sq, loc, lo, hi), counts in cache.items():
-        for req in REQUIRE:
-            for xb in EXIT_BELOW:
-                if xb >= req:
-                    continue          # would exit the bar it entered
-                p = np.zeros(n, dtype=np.float32)
-                state = 0.0
-                for i in range(n):
-                    if state > 0 and counts[i] < xb:
-                        state = 0.0
-                    if state <= 0 and counts[i] >= req:
-                        state = 1.0
-                    p[i] = state
-                cols.append(p)
-                labels.append(f"confluence req={req} exit<{xb} sq={sq:g} "
-                              f"loc={loc:g} rsi={lo:g}-{hi:g}")
+                for req in REQUIRE:
+                    for xb in EXIT_BELOW:
+                        if xb >= req:
+                            continue   # would exit the bar it entered
+                        pos = confluence_positions(
+                            bars, require=req, exit_below=xb,
+                            allow_shorts=allow_shorts, squeeze_pct=sq,
+                            location_max=loc, rsi_lo=lo, rsi_hi=hi)
+                        cols.append(np.asarray(pos, dtype=np.float32))
+                        labels.append(f"confluence req={req} exit<{xb} "
+                                      f"sq={sq:g} loc={loc:g} rsi={lo:g}-{hi:g}"
+                                      + (" short" if allow_shorts else ""))
     return np.column_stack(cols), labels
+
+
+def build(close, bars):
+    return _grid(close, bars, False)
+
+
+def build_shorts(close, bars):
+    return _grid(close, bars, True)

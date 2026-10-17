@@ -51,12 +51,22 @@ DEFAULT_SYMBOLS = [
     "BITSTAMP:BTCUSD", "COINBASE:XRPUSD", "COINBASE:FLRUSD",
     "OKX:ZBCNUSDT", "OKX:CCUSDT", "COINBASE:HBARUSD",
 ]
+# Long-only args, and the same family with shorts enabled. The built-in
+# families short by simply dropping --long-only; the custom ones expose a
+# second entry point that passes allow_shorts through to the shared builder.
 FAMILIES = {
     "ma_cross": ["--family", "ma_cross", "--long-only"],
     "breakout": ["--family", "breakout", "--long-only"],
     "follow_money": ["--strategy", "fitzz/fm_family.py:build"],
     "mean_revert": ["--strategy", "fitzz/mr_family.py:build"],
     "confluence": ["--strategy", "fitzz/conf_family.py:build"],
+}
+FAMILIES_SHORT = {
+    "ma_cross": ["--family", "ma_cross"],
+    "breakout": ["--family", "breakout"],
+    "follow_money": ["--strategy", "fitzz/fm_family.py:build_shorts"],
+    "mean_revert": ["--strategy", "fitzz/mr_family.py:build_shorts"],
+    "confluence": ["--strategy", "fitzz/conf_family.py:build_shorts"],
 }
 REPO = os.path.dirname(os.path.abspath(__file__))
 
@@ -110,7 +120,7 @@ MA_DEFAULTS = ("2:40:2", "10:200:5", "0,0.001,0.0025,0.005,0.01")
 BREAKOUT_DEFAULTS = ("10:120:5", "5:60:5")
 
 
-def trade_stats(bars_path, family, label, cost_bps):
+def trade_stats(bars_path, family, label, cost_bps, shorts=False):
     """
     Per-trade win/loss for the winning config, which the sweep does not
     report -- it scores bars, not round trips.
@@ -134,21 +144,24 @@ def trade_stats(bars_path, family, label, cost_bps):
         f = [int(v) for v in parse_range(MA_DEFAULTS[0])]
         s = [int(v) for v in parse_range(MA_DEFAULTS[1])]
         th = [float(v) for v in parse_range(MA_DEFAULTS[2])]
-        pos, labels, _ = ma_cross_family(close, f, s, th, True)
+        pos, labels, _ = ma_cross_family(close, f, s, th, not shorts)
     elif family == "breakout":
         from fitzz.sweep import breakout_family, parse_range
         e = [int(v) for v in parse_range(BREAKOUT_DEFAULTS[0])]
         x = [int(v) for v in parse_range(BREAKOUT_DEFAULTS[1])]
-        pos, labels, _ = breakout_family(close, e, x, True)
+        pos, labels, _ = breakout_family(close, e, x, not shorts)
     elif family == "confluence":
-        from fitzz.conf_family import build
-        pos, labels = build(close, bars)
+        from fitzz import conf_family
+        pos, labels = (conf_family.build_shorts if shorts
+                       else conf_family.build)(close, bars)
     elif family == "mean_revert":
-        from fitzz.mr_family import build
-        pos, labels = build(close)
+        from fitzz import mr_family
+        pos, labels = (mr_family.build_shorts if shorts
+                       else mr_family.build)(close)
     else:
-        from fitzz.fm_family import build
-        pos, labels = build(close, bars)
+        from fitzz import fm_family
+        pos, labels = (fm_family.build_shorts if shorts
+                       else fm_family.build)(close, bars)
     if label not in labels:
         return None
     col = np.asarray(pos)[:, labels.index(label)]
@@ -261,12 +274,13 @@ def fetch(symbol, interval, bars, cache):
     return path, len(fresh)
 
 
-def sweep(bars_path, family, cost_bps, block, seed):
+def sweep(bars_path, family, cost_bps, block, seed, shorts=False):
     """One sweep. Returns the tool's own result dict, or None if it bailed."""
     with tempfile.NamedTemporaryFile("r", suffix=".json", delete=False) as out:
         out_path = out.name
     cmd = [sys.executable, "-m", "fitzz", "sweep", "--json", bars_path,
-           *FAMILIES[family], "--objective", "return",
+           *(FAMILIES_SHORT if shorts else FAMILIES)[family],
+           "--objective", "return",
            "--cost-bps", str(cost_bps), "--seed", str(seed),
            "--json-out", out_path]
     if block:
@@ -299,6 +313,9 @@ def main(argv=None):
                    help="cost per unit turnover (default 10)")
     p.add_argument("--block", type=int, default=None,
                    help="bootstrap block length; default lets the tool choose")
+    p.add_argument("--shorts", action="store_true",
+                   help="Let every family take the mirror-image short as well as "
+                        "the long (default long-only).")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--cache", default=os.path.join(tempfile.gettempdir(), "fitzz_sweep_bars"),
                    help="where fetched bars are cached")
@@ -318,7 +335,8 @@ def main(argv=None):
             print(f"{sym:<20}{'-':<14}{'':>6}  fetch failed: {str(e)[:40]}")
             continue
         for fam in families:
-            res = sweep(path, fam, args.cost_bps, args.block, args.seed)
+            res = sweep(path, fam, args.cost_bps, args.block, args.seed,
+                        shorts=args.shorts)
             if "error" in res:
                 print(f"{sym:<20}{fam:<14}{n:>6}  {res['error']}")
                 continue
@@ -326,7 +344,8 @@ def main(argv=None):
             # The tool warns when a winner outlives the block: p is then too
             # small, so a 'no' makes a significant-looking result suspect.
             ok = "yes" if res.get("hold_bars", 0) <= res.get("block", 0) else "NO"
-            ts = trade_stats(path, fam, res.get("label", ""), args.cost_bps)
+            ts = trade_stats(path, fam, res.get("label", ""), args.cost_bps,
+                             shorts=args.shorts)
             hit = 100.0 * d.get("hit_rate", 0.0)
             w = f"{ts['win_pct']:>7.1f}" if ts else f"{'-':>7}"
             aw = f"{ts['avg_win']:>7.1f}" if ts else f"{'-':>7}"

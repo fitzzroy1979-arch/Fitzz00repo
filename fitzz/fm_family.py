@@ -20,7 +20,7 @@ bar t, which is the convention sweep scores against (pos[t] earns t -> t+1).
 
 import numpy as np
 
-from fitzz.trading import chaikin_money_flow, money_flow_volume, sma
+from fitzz.trading import follow_money_positions
 
 # The grid. Kept deliberately small: every extra config is another draw on the
 # same data, which the Reality Check then has to charge for.
@@ -32,44 +32,32 @@ VOL_WINDOW = 20
 CMF_EXIT = -0.05
 
 
-def build(close, bars):
-    """Return (positions (T, K), labels) over the follow_money grid."""
-    n = len(close)
+def _grid(close, bars, allow_shorts):
     volumes = [float(b.get("volume") or 0.0) for b in bars]
     if sum(volumes) <= 0:
         raise SystemExit("these bars carry no volume; follow_money cannot be swept "
                          "on them (an INDEX: feed rather than an exchange symbol?)")
-
-    mfv = money_flow_volume(bars)
-    vol_ma = sma(volumes, VOL_WINDOW)
-    big = {}
-    for surge in SURGES:
-        big[surge] = [
-            vol_ma[i] is not None and vol_ma[i] > 0
-            and volumes[i] >= surge * vol_ma[i] and mfv[i] > 0
-            for i in range(n)
-        ]
-    cmfs = {w: chaikin_money_flow(mfv, volumes, w) for w in CMF_WINDOWS}
-
     cols, labels = [], []
     for surge in SURGES:
-        bb = big[surge]
         for w in CMF_WINDOWS:
-            cmf = cmfs[w]
             for enter in CMF_ENTERS:
                 for confirm in CONFIRMS:
-                    p = np.zeros(n, dtype=np.float32)
-                    state = 0.0
-                    for i in range(n):
-                        c = cmf[i]
-                        if state > 0:
-                            if c is not None and c <= CMF_EXIT:
-                                state = 0.0
-                        elif c is not None and c >= enter:
-                            if any(bb[max(0, i - confirm + 1):i + 1]):
-                                state = 1.0
-                        p[i] = state
-                    cols.append(p)
+                    pos = follow_money_positions(
+                        bars, vol_window=VOL_WINDOW, surge=surge, cmf_window=w,
+                        cmf_enter=enter, cmf_exit=CMF_EXIT, confirm=confirm,
+                        allow_shorts=allow_shorts)
+                    cols.append(np.asarray(pos, dtype=np.float32))
                     labels.append(f"follow_money surge={surge:g} cmf={w} "
-                                  f"enter={enter:g} confirm={confirm}")
+                                  f"enter={enter:g} confirm={confirm}"
+                                  + (" short" if allow_shorts else ""))
     return np.column_stack(cols), labels
+
+
+def build(close, bars):
+    """Long-only grid."""
+    return _grid(close, bars, False)
+
+
+def build_shorts(close, bars):
+    """Same grid, also selling big volume into distribution."""
+    return _grid(close, bars, True)
