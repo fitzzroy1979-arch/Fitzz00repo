@@ -222,6 +222,22 @@ def fetch(symbol, interval, bars, cache):
         raise RuntimeError(
             f"{symbol}: fetched series steps {median}s but {interval} was asked "
             f"for — the chart was on another timeframe. Not caching this.")
+
+    # A re-read must trade at roughly the price the cached one did. A short
+    # series is re-read every run until two reads agree, and "longer wins"
+    # below is only sound for the same instrument — a cross-symbol read is
+    # wrong however long it is. CC is 1,482 bars, so it is re-read every time;
+    # one of those came back holding BTC's 5,000-bar series and was accepted
+    # for being the longer of the two.
+    if cached and fresh:
+        try:
+            a, b = float(fresh[-1]["close"]), float(cached[-1]["close"])
+            if a > 0 and b > 0 and not (0.2 <= a / b <= 5.0):
+                raise RuntimeError(
+                    f"{symbol}: re-read closes at {a}, cached series closes at "
+                    f"{b} — different instrument. Keeping the cached series.")
+        except (KeyError, TypeError, ValueError):
+            pass
     if cached and len(fresh) < len(cached):
         # A worse read than one we already hold: keep the longer series and do
         # not confirm, so the next run checks again.

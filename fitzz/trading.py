@@ -513,13 +513,24 @@ class TradingViewBridge:
         median = gaps[len(gaps) // 2]
         return abs(median - want) <= want * tol, median
 
-    def _quote_price(self, symbol):
-        """Live price for `symbol`, or None if the bridge will not say."""
-        q = self.get_quote(symbol) or {}
-        for k in ("price", "last", "close", "lp"):
-            v = q.get(k)
-            if isinstance(v, (int, float)) and v > 0:
-                return float(v)
+    def _quote_price(self, symbol, attempts=3):
+        """
+        Live price for `symbol`, or None if the bridge will not say.
+
+        Retried, because the caller treats "no quote" as "cannot verify" and
+        lets the bars through. A single failed quote therefore disables the
+        check -- and quotes fail precisely when the bridge is busy, which is
+        when a read is most likely to be wrong. Retrying keeps the guard alive
+        through the conditions it exists for.
+        """
+        for i in range(attempts):
+            q = self.get_quote(symbol) or {}
+            for k in ("price", "last", "close", "lp"):
+                v = q.get(k)
+                if isinstance(v, (int, float)) and v > 0:
+                    return float(v)
+            if i + 1 < attempts:
+                time.sleep(self.settle)
         return None
 
     def _prices_agree(self, symbol, bars, lo=0.5, hi=2.0):
