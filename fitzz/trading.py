@@ -390,6 +390,14 @@ class TradingViewBridge:
             available = self.ensure_history(count, tv_resolution)
             candidate = self.get_ohlcv(count, stale_fingerprint=stale,
                                        expect_at_least=available)
+            spacing_ok, median = self._bar_spacing_ok(candidate, tv_resolution)
+            if not spacing_ok:
+                last_err = BridgeError(
+                    f"{symbol}: bars step {median}s but {tv_resolution} was "
+                    f"asked for -- the chart reported the timeframe change "
+                    f"before its data caught up.")
+                time.sleep(self.settle)
+                continue
             if self._prices_agree(symbol, candidate):
                 bars = candidate
                 break
@@ -432,6 +440,34 @@ class TradingViewBridge:
                       f"can serve; rerun for the full range.", file=sys.stderr)
         self._last_bars = bars
         return bars
+
+    @staticmethod
+    def _bar_spacing_ok(bars, tv_resolution, tol=0.25):
+        """
+        Do these bars actually step at `tv_resolution`?
+
+        The chart reports its resolution the moment a timeframe change is
+        accepted, exactly as it does for a symbol, so wait_for_chart can pass
+        while the series is still the old timeframe. That mix-up is invisible
+        to a price check -- 4h CC and daily CC trade at the same price -- and
+        shows up only as a bar count that makes no sense for the window: a
+        daily request for CC came back with 1,482 bars, which is its 4h count.
+
+        Uses the median gap so listing halts, weekends and feed outages do not
+        trip it. Returns (ok, median_seconds).
+        """
+        want_min = INTERVAL_MINUTES.get(str(tv_resolution))
+        if not want_min or len(bars) < 10:
+            return True, None
+        want = want_min * 60
+        gaps = sorted(b2["time"] - b1["time"]
+                      for b1, b2 in zip(bars, bars[1:])
+                      if isinstance(b1.get("time"), (int, float))
+                      and isinstance(b2.get("time"), (int, float)))
+        if not gaps:
+            return True, None
+        median = gaps[len(gaps) // 2]
+        return abs(median - want) <= want * tol, median
 
     def _quote_price(self, symbol):
         """Live price for `symbol`, or None if the bridge will not say."""
