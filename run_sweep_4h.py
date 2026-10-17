@@ -55,6 +55,7 @@ FAMILIES = {
     "ma_cross": ["--family", "ma_cross", "--long-only"],
     "breakout": ["--family", "breakout", "--long-only"],
     "follow_money": ["--strategy", "fitzz/fm_family.py:build"],
+    "mean_revert": ["--strategy", "fitzz/mr_family.py:build"],
 }
 REPO = os.path.dirname(os.path.abspath(__file__))
 
@@ -138,6 +139,9 @@ def trade_stats(bars_path, family, label, cost_bps):
         e = [int(v) for v in parse_range(BREAKOUT_DEFAULTS[0])]
         x = [int(v) for v in parse_range(BREAKOUT_DEFAULTS[1])]
         pos, labels, _ = breakout_family(close, e, x, True)
+    elif family == "mean_revert":
+        from fitzz.mr_family import build
+        pos, labels = build(close)
     else:
         from fitzz.fm_family import build
         pos, labels = build(close, bars)

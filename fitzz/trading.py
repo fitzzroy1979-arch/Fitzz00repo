@@ -1020,6 +1020,152 @@ def _breakout_label(entry, exit_bars, stop_loss_pct=0.0, take_profit_pct=0.0,
     return label + ("+" + "+".join(extras) if extras else "")
 
 
+def rolling_std(values, window):
+    """Sample standard deviation over the trailing `window` bars, inclusive."""
+    out = [None] * len(values)
+    if window <= 1:
+        return out
+    for i in range(window - 1, len(values)):
+        chunk = values[i - window + 1:i + 1]
+        m = sum(chunk) / window
+        var = sum((x - m) ** 2 for x in chunk) / (window - 1)
+        out[i] = var ** 0.5
+    return out
+
+
+def zscore(values, window):
+    """
+    How far each bar sits from its own trailing mean, in standard deviations.
+
+    None until the window fills, and None on a flat stretch where the
+    deviation is zero -- there is no "far from normal" when nothing has
+    moved, and dividing by it would invent a signal.
+    """
+    mean = sma(values, window)
+    sd = rolling_std(values, window)
+    out = [None] * len(values)
+    for i, v in enumerate(values):
+        if mean[i] is not None and sd[i]:
+            out[i] = (v - mean[i]) / sd[i]
+    return out
+
+
+def backtest_mean_revert(bars, starting_capital, window=20, entry_z=-2.0,
+                         exit_z=0.0, max_hold=0, stop_loss_pct=0.0,
+                         take_profit_pct=0.0, trend_filter=0):
+    """
+    Long-only mean reversion -- the opposite bet to the other three families.
+
+    sma_cross, breakout and follow_money all buy strength and sell weakness.
+    This buys weakness: enter when the close sits `entry_z` standard
+    deviations or more below its own trailing mean, exit when it recovers to
+    `exit_z` (0 = back to the mean).
+
+    `max_hold` caps how long a position can stay open. Mean reversion's
+    characteristic failure is a price that is cheap and keeps getting
+    cheaper, where the thesis is wrong but no exit rule has fired; a hard
+    time limit bounds that. 0 disables it.
+
+    Note that `trend_filter` works the same way as elsewhere -- only enter
+    above SMA(trend_filter) -- which here means "buy dips, but only in an
+    uptrend" rather than contradicting the strategy.
+
+    Returns the same metrics dict shape as backtest_sma_cross.
+    """
+    closes = [float(b["close"]) for b in bars]
+    n = len(closes)
+    if entry_z >= exit_z:
+        pass  # a wide band is unusual but legal; the caller may want it
+    warmup = max(window, trend_filter)
+    if n < warmup + 2:
+        return {"error": f"not enough bars ({n}) for windows (window {window}, "
+                         f"trend {trend_filter})"}
+
+    z = zscore(closes, window)
+    trend_ma = sma(closes, trend_filter) if trend_filter else [None] * n
+
+    cash = float(starting_capital)
+    units = 0.0
+    in_pos = False
+    entry_price = 0.0
+    entry_i = 0
+    trades = []
+    equity_curve = []
+
+    for i in range(n):
+        price = closes[i]
+
+        # Exits first, so a stop can fire on the same bar an entry would.
+        if in_pos:
+            exit_now = (
+                (stop_loss_pct and price <= entry_price * (1 - stop_loss_pct / 100)) or
+                (take_profit_pct and price >= entry_price * (1 + take_profit_pct / 100)) or
+                (z[i] is not None and z[i] >= exit_z) or
+                (max_hold and (i - entry_i) >= max_hold)
+            )
+            if exit_now:
+                cash = units * price
+                trades.append((entry_price, price, (price / entry_price - 1) * 100))
+                units = 0.0
+                in_pos = False
+
+        if not in_pos and z[i] is not None and z[i] <= entry_z:
+            trend_ok = (not trend_filter) or (trend_ma[i] is not None and price > trend_ma[i])
+            if trend_ok:
+                units = cash / price
+                cash = 0.0
+                in_pos = True
+                entry_price = price
+                entry_i = i
+
+        equity_curve.append(cash + units * price)
+
+    final_price = closes[-1]
+    final_equity = cash + units * final_price
+    if in_pos:
+        trades.append((entry_price, final_price, (final_price / entry_price - 1) * 100))
+
+    peak = equity_curve[0]
+    max_dd = 0.0
+    for e in equity_curve:
+        peak = max(peak, e)
+        if peak > 0:
+            max_dd = min(max_dd, (e / peak - 1) * 100)
+
+    wins = [tr for tr in trades if tr[2] > 0]
+    buy_hold = (final_price / closes[0] - 1) * 100
+
+    return {
+        "bars": n,
+        "from": fmt_time(bars[0].get("time")),
+        "to": fmt_time(bars[-1].get("time")),
+        "starting_capital": round(float(starting_capital), 2),
+        "final_equity": round(final_equity, 2),
+        "return_pct": round((final_equity / starting_capital - 1) * 100, 2),
+        "buy_hold_pct": round(buy_hold, 2),
+        "trades": len(trades),
+        "win_rate_pct": round(100 * len(wins) / len(trades), 1) if trades else 0.0,
+        "max_drawdown_pct": round(max_dd, 2),
+        "strategy": _mr_label(window, entry_z, exit_z, max_hold, stop_loss_pct,
+                              take_profit_pct, trend_filter),
+    }
+
+
+def _mr_label(window, entry_z, exit_z, max_hold=0, stop_loss_pct=0.0,
+              take_profit_pct=0.0, trend_filter=0):
+    label = f"mean_revert({window}/z{entry_z:g}->{exit_z:g})"
+    extras = []
+    if max_hold:
+        extras.append(f"hold<={max_hold}")
+    if trend_filter:
+        extras.append(f"trend{trend_filter}")
+    if stop_loss_pct:
+        extras.append(f"sl{stop_loss_pct:g}%")
+    if take_profit_pct:
+        extras.append(f"tp{take_profit_pct:g}%")
+    return label + ("+" + "+".join(extras) if extras else "")
+
+
 def build_cot_gate(bars, market, min_change=0.0):
     """
     Per-bar entry gate from CFTC commercial positioning.
@@ -1134,6 +1280,14 @@ def cmd_backtest(args, bridge):
                     vol_window=args.fm_vol_window, surge=args.fm_surge,
                     cmf_window=args.fm_cmf_window, cmf_enter=args.fm_cmf_enter,
                     cmf_exit=args.fm_cmf_exit, confirm=args.fm_confirm,
+                    stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
+                    trend_filter=args.trend_filter,
+                )
+            elif args.strategy == "mean_revert":
+                metrics = backtest_mean_revert(
+                    bars, args.starting_capital,
+                    window=args.mr_window, entry_z=args.mr_entry_z,
+                    exit_z=args.mr_exit_z, max_hold=args.mr_max_hold,
                     stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
                     trend_filter=args.trend_filter,
                 )
@@ -2160,11 +2314,13 @@ def build_parser():
     bt.add_argument("--starting-capital", type=float, default=DEFAULT_STARTING_CASH,
                     help="Starting capital for the backtest "
                          f"(default {DEFAULT_STARTING_CASH:g}).")
-    bt.add_argument("--strategy", choices=["sma_cross", "follow_money", "breakout"],
+    bt.add_argument("--strategy",
+                    choices=["sma_cross", "follow_money", "breakout", "mean_revert"],
                     default="sma_cross",
                     help="Which strategy to backtest (default sma_cross). "
                          "follow_money rides big buy-side volume plus sustained "
-                         "accumulation; breakout is a long-only Donchian channel.")
+                         "accumulation; breakout is a long-only Donchian channel; "
+                         "mean_revert buys statistically depressed prices.")
     bt.add_argument("--fast", type=int, default=20, help="Fast SMA window (default 20).")
     bt.add_argument("--slow", type=int, default=50, help="Slow SMA window (default 50).")
     bt.add_argument("--stop-loss", type=float, default=0.0,
@@ -2173,6 +2329,15 @@ def build_parser():
                     help="Take-profit %% above entry, e.g. 15 (default 0 = off).")
     bt.add_argument("--trend-filter", type=int, default=0,
                     help="Only go long when price > SMA(N), e.g. 200 (default 0 = off).")
+    bt.add_argument("--mr-window", type=int, default=20,
+                    help="[mean_revert] Lookback for the mean and deviation (default 20).")
+    bt.add_argument("--mr-entry-z", type=float, default=-2.0,
+                    help="[mean_revert] Enter at this z-score or lower (default -2).")
+    bt.add_argument("--mr-exit-z", type=float, default=0.0,
+                    help="[mean_revert] Exit once z recovers to this (default 0 = the mean).")
+    bt.add_argument("--mr-max-hold", type=int, default=0,
+                    help="[mean_revert] Force an exit after this many bars "
+                         "(default 0 = off).")
     bt.add_argument("--bo-entry", type=int, default=20,
                     help="[breakout] Enter on a new high over this many bars (default 20).")
     bt.add_argument("--bo-exit", type=int, default=10,
