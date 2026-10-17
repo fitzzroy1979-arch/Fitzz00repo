@@ -1166,6 +1166,231 @@ def _mr_label(window, entry_z, exit_z, max_hold=0, stop_loss_pct=0.0,
     return label + ("+" + "+".join(extras) if extras else "")
 
 
+def rsi(closes, window=14):
+    """
+    Wilder's RSI. Measures how one-sided recent movement has been, which is
+    a different question from direction: price can be rising while RSI falls
+    (a tiring advance), and that divergence is the whole reason to carry it
+    alongside a trend filter rather than instead of one.
+    """
+    out = [None] * len(closes)
+    if window <= 0 or len(closes) <= window:
+        return out
+    gains = losses = 0.0
+    for i in range(1, window + 1):
+        d = closes[i] - closes[i - 1]
+        gains += max(d, 0.0)
+        losses += max(-d, 0.0)
+    ag, al = gains / window, losses / window
+    out[window] = 100.0 if al == 0 else 100.0 - 100.0 / (1 + ag / al)
+    for i in range(window + 1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        ag = (ag * (window - 1) + max(d, 0.0)) / window
+        al = (al * (window - 1) + max(-d, 0.0)) / window
+        out[i] = 100.0 if al == 0 else 100.0 - 100.0 / (1 + ag / al)
+    return out
+
+
+def bollinger_bandwidth(closes, window=20, mult=2.0):
+    """
+    Width of the Bollinger band as a fraction of its middle line.
+
+    A volatility-regime reading, orthogonal to direction: it says whether the
+    market is coiled or extended without any opinion on which way. Narrow
+    bandwidth tends to precede expansion, which is why a squeeze is worth
+    having as a separate vote rather than folded into a trend signal.
+    """
+    mid = sma(closes, window)
+    sd = rolling_std(closes, window)
+    out = [None] * len(closes)
+    for i in range(len(closes)):
+        if mid[i] and sd[i] is not None and mid[i] != 0:
+            out[i] = (2 * mult * sd[i]) / mid[i]
+    return out
+
+
+def percentile_rank(values, window):
+    """Where each value sits within its own trailing window, 0.0 to 1.0."""
+    out = [None] * len(values)
+    for i in range(len(values)):
+        if values[i] is None:
+            continue
+        lo = max(0, i - window + 1)
+        hist = [v for v in values[lo:i + 1] if v is not None]
+        if len(hist) >= max(5, window // 4):
+            out[i] = sum(1 for v in hist if v <= values[i]) / len(hist)
+    return out
+
+
+def confluence_flags(bars, trend=200, trend_slope=20, rsi_window=14,
+                     rsi_lo=45.0, rsi_hi=70.0, bb_window=20, bb_lookback=100,
+                     squeeze_pct=0.35, vol_window=20, vol_mult=1.2,
+                     cmf_window=20, range_window=20, location_max=0.5):
+    """
+    Five entry conditions, each reading a different dimension of the tape.
+
+    The point of confluence is that the votes disagree sometimes. Five
+    signals that all answer "is price going up" are one opinion counted five
+    times, and requiring all five of those only makes the same bet rarer, not
+    better. So each condition here measures something the others do not:
+
+      direction     price above a long average that is itself rising.
+                    Where the market is going.
+      momentum      RSI inside a constructive band -- strong enough to mean
+                    buyers are present, not so strong that the move is spent.
+                    How hard it is going, and whether it is tiring.
+      volatility    Bollinger bandwidth in the low part of its own recent
+                    range: a squeeze. What regime it is in, with no view on
+                    direction at all.
+      participation outsized volume AND positive money flow. Whether real
+                    money is behind the move or it is drifting on nothing.
+      location      price in the lower half of its recent range. Where it
+                    sits relative to value -- buying a pullback rather than
+                    chasing an extension.
+
+    Note that direction and location deliberately pull against each other:
+    an uptrend that has pulled back. That tension is the setup, and it is
+    why this is not simply the trend-following family again.
+
+    Returns (counts, flags), every condition reading only data through bar i.
+    """
+    closes = [float(b["close"]) for b in bars]
+    volumes = [float(b.get("volume") or 0.0) for b in bars]
+    n = len(closes)
+
+    trend_ma = sma(closes, trend)
+    r = rsi(closes, rsi_window)
+    bw = bollinger_bandwidth(closes, bb_window)
+    bw_rank = percentile_rank(bw, bb_lookback)
+    vol_ma = sma(volumes, vol_window)
+    cmf = chaikin_money_flow(money_flow_volume(bars), volumes, cmf_window)
+    hi = rolling_max(closes, range_window)
+    lo = rolling_min(closes, range_window)
+
+    counts, flags = [], []
+    for i in range(n):
+        rising = (trend_ma[i] is not None and i >= trend_slope
+                  and trend_ma[i - trend_slope] is not None
+                  and trend_ma[i] > trend_ma[i - trend_slope])
+        rng = (hi[i] - lo[i]) if (hi[i] is not None and lo[i] is not None) else None
+        where = ((closes[i] - lo[i]) / rng) if rng else None
+        f = {
+            "direction": (trend_ma[i] is not None and closes[i] > trend_ma[i]
+                          and rising),
+            "momentum": r[i] is not None and rsi_lo <= r[i] <= rsi_hi,
+            "volatility": bw_rank[i] is not None and bw_rank[i] <= squeeze_pct,
+            "participation": (vol_ma[i] is not None and vol_ma[i] > 0
+                              and volumes[i] >= vol_mult * vol_ma[i]
+                              and cmf[i] is not None and cmf[i] > 0),
+            "location": where is not None and where <= location_max,
+        }
+        flags.append(f)
+        counts.append(sum(1 for v in f.values() if v))
+    return counts, flags
+
+
+def backtest_confluence(bars, starting_capital, require=5, exit_below=2,
+                        trend=200, rsi_lo=45.0, rsi_hi=70.0,
+                        squeeze_pct=0.35, vol_mult=1.2, location_max=0.5,
+                        stop_loss_pct=0.0, take_profit_pct=0.0):
+    """
+    Long-only confluence: enter only when at least `require` of the five
+    conditions agree, exit when agreement falls below `exit_below`.
+
+    require=5 is the strict reading of "five points of confluence"; lower
+    values relax it, and sweeping `require` is the way to find out whether
+    insisting on all five helps or merely starves the strategy of trades.
+
+    Returns the same metrics dict shape as backtest_sma_cross.
+    """
+    closes = [float(b["close"]) for b in bars]
+    n = len(closes)
+    warmup = max(trend, 100, 20)
+    if n < warmup + 2:
+        return {"error": f"not enough bars ({n}) for the confluence windows "
+                         f"(longest {warmup})"}
+    if sum(float(b.get("volume") or 0.0) for b in bars) <= 0:
+        return {"error": "no volume on these bars; two of the five conditions "
+                         "need it (try an exchange symbol, not an INDEX: feed)"}
+
+    counts, _ = confluence_flags(bars, trend=trend, rsi_lo=rsi_lo,
+                                 rsi_hi=rsi_hi, squeeze_pct=squeeze_pct,
+                                 vol_mult=vol_mult, location_max=location_max)
+
+    cash = float(starting_capital)
+    units = 0.0
+    in_pos = False
+    entry_price = 0.0
+    trades = []
+    equity_curve = []
+    peak_count = 0
+
+    for i in range(n):
+        price = closes[i]
+
+        if in_pos:
+            exit_now = (
+                (stop_loss_pct and price <= entry_price * (1 - stop_loss_pct / 100)) or
+                (take_profit_pct and price >= entry_price * (1 + take_profit_pct / 100)) or
+                (counts[i] < exit_below)
+            )
+            if exit_now:
+                cash = units * price
+                trades.append((entry_price, price, (price / entry_price - 1) * 100))
+                units = 0.0
+                in_pos = False
+
+        if not in_pos and counts[i] >= require:
+            units = cash / price
+            cash = 0.0
+            in_pos = True
+            entry_price = price
+
+        peak_count = max(peak_count, counts[i])
+        equity_curve.append(cash + units * price)
+
+    final_price = closes[-1]
+    final_equity = cash + units * final_price
+    if in_pos:
+        trades.append((entry_price, final_price, (final_price / entry_price - 1) * 100))
+
+    peak = equity_curve[0]
+    max_dd = 0.0
+    for e in equity_curve:
+        peak = max(peak, e)
+        if peak > 0:
+            max_dd = min(max_dd, (e / peak - 1) * 100)
+
+    wins = [tr for tr in trades if tr[2] > 0]
+    buy_hold = (final_price / closes[0] - 1) * 100
+
+    return {
+        "bars": n,
+        "from": fmt_time(bars[0].get("time")),
+        "to": fmt_time(bars[-1].get("time")),
+        "starting_capital": round(float(starting_capital), 2),
+        "final_equity": round(final_equity, 2),
+        "return_pct": round((final_equity / starting_capital - 1) * 100, 2),
+        "buy_hold_pct": round(buy_hold, 2),
+        "trades": len(trades),
+        "win_rate_pct": round(100 * len(wins) / len(trades), 1) if trades else 0.0,
+        "max_drawdown_pct": round(max_dd, 2),
+        "bars_at_full_confluence": sum(1 for c in counts if c >= 5),
+        "best_confluence_seen": peak_count,
+        "strategy": _conf_label(require, exit_below, stop_loss_pct, take_profit_pct),
+    }
+
+
+def _conf_label(require, exit_below, stop_loss_pct=0.0, take_profit_pct=0.0):
+    label = f"confluence({require}of5,exit<{exit_below})"
+    extras = []
+    if stop_loss_pct:
+        extras.append(f"sl{stop_loss_pct:g}%")
+    if take_profit_pct:
+        extras.append(f"tp{take_profit_pct:g}%")
+    return label + ("+" + "+".join(extras) if extras else "")
+
+
 def build_cot_gate(bars, market, min_change=0.0):
     """
     Per-bar entry gate from CFTC commercial positioning.
@@ -1282,6 +1507,14 @@ def cmd_backtest(args, bridge):
                     cmf_exit=args.fm_cmf_exit, confirm=args.fm_confirm,
                     stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
                     trend_filter=args.trend_filter,
+                )
+            elif args.strategy == "confluence":
+                metrics = backtest_confluence(
+                    bars, args.starting_capital,
+                    require=args.conf_require, exit_below=args.conf_exit,
+                    trend=args.conf_trend, vol_mult=args.conf_vol_mult,
+                    squeeze_pct=args.conf_squeeze, location_max=args.conf_location,
+                    stop_loss_pct=args.stop_loss, take_profit_pct=args.take_profit,
                 )
             elif args.strategy == "mean_revert":
                 metrics = backtest_mean_revert(
@@ -2315,12 +2548,14 @@ def build_parser():
                     help="Starting capital for the backtest "
                          f"(default {DEFAULT_STARTING_CASH:g}).")
     bt.add_argument("--strategy",
-                    choices=["sma_cross", "follow_money", "breakout", "mean_revert"],
+                    choices=["sma_cross", "follow_money", "breakout",
+                             "mean_revert", "confluence"],
                     default="sma_cross",
                     help="Which strategy to backtest (default sma_cross). "
                          "follow_money rides big buy-side volume plus sustained "
                          "accumulation; breakout is a long-only Donchian channel; "
-                         "mean_revert buys statistically depressed prices.")
+                         "mean_revert buys statistically depressed prices; "
+                         "confluence needs N of five conditions to agree.")
     bt.add_argument("--fast", type=int, default=20, help="Fast SMA window (default 20).")
     bt.add_argument("--slow", type=int, default=50, help="Slow SMA window (default 50).")
     bt.add_argument("--stop-loss", type=float, default=0.0,
@@ -2329,6 +2564,23 @@ def build_parser():
                     help="Take-profit %% above entry, e.g. 15 (default 0 = off).")
     bt.add_argument("--trend-filter", type=int, default=0,
                     help="Only go long when price > SMA(N), e.g. 200 (default 0 = off).")
+    bt.add_argument("--conf-require", type=int, default=5,
+                    help="[confluence] How many of the five conditions must agree "
+                         "to enter (default 5).")
+    bt.add_argument("--conf-exit", type=int, default=2,
+                    help="[confluence] Exit once agreement falls below this (default 2).")
+    bt.add_argument("--conf-trend", type=int, default=200,
+                    help="[confluence] Long moving average for the trend condition "
+                         "(default 200).")
+    bt.add_argument("--conf-vol-mult", type=float, default=1.5,
+                    help="[confluence] Volume multiple for the volume condition "
+                         "(default 1.5).")
+    bt.add_argument("--conf-squeeze", type=float, default=0.35,
+                    help="[confluence] Bollinger bandwidth percentile counting as a "
+                         "squeeze (default 0.35).")
+    bt.add_argument("--conf-location", type=float, default=0.5,
+                    help="[confluence] Max position in the recent range to count as "
+                         "a pullback, 0=low 1=high (default 0.5).")
     bt.add_argument("--mr-window", type=int, default=20,
                     help="[mean_revert] Lookback for the mean and deviation (default 20).")
     bt.add_argument("--mr-entry-z", type=float, default=-2.0,
