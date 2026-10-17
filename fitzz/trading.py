@@ -88,7 +88,7 @@ MAX_BARS = 5000
 
 # Starting cash for --backtest and --simulate when --starting-capital is not
 # given. Both modes read the same --starting-capital flag.
-DEFAULT_STARTING_CASH = 3000.0
+DEFAULT_STARTING_CASH = 10000.0
 
 # --learn provider defaults. hermes -> Together's OpenAI-compatible endpoint;
 # claude -> the Anthropic API via the official SDK; perplexity -> Sonar over
