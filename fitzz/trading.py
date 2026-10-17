@@ -54,6 +54,7 @@ window to gate them to certain hours (local time):
 
 import argparse
 import datetime as dt
+import fcntl
 import json
 from datetime import datetime, timezone
 import os
@@ -148,6 +149,7 @@ class TradingViewBridge:
         self.settle = settle          # seconds to let a symbol/timeframe load
         self.verbose = verbose
         self._last_bars = None        # previous read, to detect stale chart data
+        self._lock_fh = None          # held while this process drives the chart
 
     def _run(self, args, timeout=60):
         if not self.cli.exists():
@@ -372,6 +374,8 @@ class TradingViewBridge:
         the previous symbol's bars and reports identical results for unrelated
         instruments.
         """
+        if not os.environ.get("FITZZ_NO_CHART_LOCK"):
+            self._acquire_chart_lock()
         stale = self._fingerprint(self._last_bars)
         # A busy or still-warming chart can drop the first `symbol` command, so
         # re-issue it before giving up -- the first symbol after a cold start is
@@ -440,6 +444,46 @@ class TradingViewBridge:
                       f"can serve; rerun for the full range.", file=sys.stderr)
         self._last_bars = bars
         return bars
+
+    # The TradingView chart is one global object. Two processes reading it at
+    # once interleave their symbol switches and each gets the other's bars --
+    # silently, because every read looks structurally valid. This lock makes
+    # that collision an error instead of corrupt data.
+    _LOCK_PATH = SCRIPT_DIR / ".00fitzz" / "chart.lock"
+
+    def _acquire_chart_lock(self):
+        """Take the chart lock, or explain who already has it."""
+        if self._lock_fh is not None:
+            return
+        self._LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(self._LOCK_PATH, "a+")
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            fh.seek(0)
+            holder = fh.read().strip() or "another process"
+            fh.close()
+            raise BridgeError(
+                f"The TradingView chart is in use by {holder}. Two processes "
+                f"reading one chart interleave their symbol switches and each "
+                f"gets the other's bars, so this run would produce wrong "
+                f"numbers rather than an error. Wait for it to finish, or set "
+                f"FITZZ_NO_CHART_LOCK=1 to override."
+            )
+        fh.seek(0)
+        fh.truncate()
+        fh.write(f"pid {os.getpid()} ({' '.join(sys.argv[:2])})")
+        fh.flush()
+        self._lock_fh = fh
+
+    def release_chart_lock(self):
+        if self._lock_fh is not None:
+            try:
+                fcntl.flock(self._lock_fh.fileno(), fcntl.LOCK_UN)
+                self._lock_fh.close()
+            except OSError:
+                pass
+            self._lock_fh = None
 
     @staticmethod
     def _bar_spacing_ok(bars, tv_resolution, tol=0.25):
