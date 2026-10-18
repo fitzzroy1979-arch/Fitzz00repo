@@ -10,13 +10,42 @@ Five strategy families, long and short, ten symbols, two timeframes, four
 cost levels — roughly 140 significance sweeps over ~20,000 parameter
 configurations each. Two results ever cleared p ≤ 0.05:
 
-| candidate | p(SPA) | what killed it |
+| candidate | p(SPA) | status |
 |---|---|---|
-| ZBCN mean_revert, 4h long | 0.021 | holdout: +0.000517 → **-0.000002** per bar |
+| ZBCN mean_revert, 4h long | 0.021 | holdout at that config: +0.000517 → **-0.000002** per bar |
 | ZBCN mean_revert, 1h short | 0.037 | costs: gone by 25 bps, holdout -0.000001 at 100 |
+| FLR confluence, 4h short | 0.033 | RC 0.154; holdout 82% decayed; absent on unseen symbols |
 
 Across 30 sweeps, chance alone predicts ~1.5 results under 5%. Finding one
 or two is not a finding.
+
+### The one result costs do not kill
+
+A cost scan across all five families on the six symbols at 4h — 30 pairs —
+reports "significance is gone by 10 bps" for 29 of them. The exception is
+ZBCN mean_revert, which holds SPA 0.011 at 10 bps and only reaches 0.021 at
+100. Nothing else found here is cost-robust at all, so it deserves recording
+rather than rounding down to "nothing worked".
+
+It is still not tradable evidence:
+
+* Reality Check never clears it — 0.117 at best, at every cost level. The two
+  tests have split on every candidate and the conservative one has been right
+  each time.
+* At the 10 bps winner specifically the holdout is -0.000002: nothing. The
+  positive holdouts at 25–100 bps belong to a different, stricter config.
+* One result from 30 sweeps is below the ~1.5 chance predicts.
+* It appears on no other symbol, in either direction, at either timeframe.
+* ZBCN is the thinnest instrument in the set. That is simultaneously why mean
+  reversion is most plausible there — illiquid tokens overshoot and snap back
+  — and why a modelled cost is least believable there.
+
+### What the scan shows about everything else
+
+Nearly every one of the 30 pairs posts a healthy in-sample edge, +0.0001 to
++0.0006 per bar, with a **negative holdout**. In-sample positive and
+out-of-sample negative, repeated across 30 independent symbol/family pairs,
+is the clearest single picture of what a parameter search does to this data.
 
 ## What was tested
 
