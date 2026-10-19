@@ -15,6 +15,8 @@ configurations each. Two results ever cleared p ≤ 0.05:
 | ZBCN mean_revert, 4h long | 0.021 | holdout at that config: +0.000517 → **-0.000002** per bar |
 | ZBCN mean_revert, 1h short | 0.037 | costs: gone by 25 bps, holdout -0.000001 at 100 |
 | FLR confluence, 4h short | 0.033 | RC 0.154; holdout 82% decayed; absent on unseen symbols |
+| QNT mean_revert, 4h long | 0.031 | drops to 0.127 once a third is held out; RC never clears |
+| CC mean_revert, 4h short | 0.038 | holdout **-0.000879**; gone by 25 bps |
 
 Across 30 sweeps, chance alone predicts ~1.5 results under 5%. Finding one
 or two is not a finding.
@@ -40,6 +42,27 @@ It is still not tradable evidence:
   reversion is most plausible there — illiquid tokens overshoot and snap back
   — and why a modelled cost is least believable there.
 
+### mean_revert across eleven symbols
+
+Adding QNT gave mean reversion a second symbol under 5%, which is worth more
+attention than one. The tally:
+
+| | |
+|---|---|
+| clears 5% on SPA, full window | **2** — ZBCN 0.021, QNT 0.031 |
+| clears Reality Check | **0** — best is 0.117 |
+| fails | 9 — BTC, XRP, FLR, CC, HBAR, SOL, ADA, LINK, DOT |
+
+Two of eleven, against ~1.8 expected by chance across 35 sweeps. Both are
+thin, low-liquidity tokens, which cuts both ways: mean reversion is most
+plausible where price overshoots and snaps back for want of a tight market,
+and that is exactly where a modelled 10 bps round-turn is least believable.
+
+QNT's holdout is better behaved than most — positive at every cost level,
+reaching roughly zero only at 100 bps — but its p-value falls from 0.031 to
+0.127 as soon as a third of the data is reserved, so the significance was
+coming from the full window rather than from the signal.
+
 ### What the scan shows about everything else
 
 Nearly every one of the 30 pairs posts a healthy in-sample edge, +0.0001 to
@@ -60,8 +83,13 @@ is the clearest single picture of what a parameter search does to this data.
 Every one of those backtest headlines is noise. The sweep says so for all
 five, which is the point of having it.
 
-Symbols: BTC, XRP, FLR, ZBCN, CC (Canton), HBAR, plus SOL, ADA, LINK, DOT as
-out-of-sample. Timeframes: 1d, 4h, 1h. Costs: 10, 25, 50, 100 bps.
+Symbols: BTC, XRP, FLR, ZBCN, CC (Canton), HBAR, QNT, plus SOL, ADA, LINK,
+DOT as out-of-sample. Timeframes: 1d, 4h, 1h. Costs: 10, 25, 50, 100 bps.
+
+QNT is worth keeping in the set as a counterexample: over eight years it rose
+155% while sma_cross finished at -1.97% with a 79% drawdown. Every other
+symbol either trends enough for a trend follower to beat holding, or falls
+far enough that sitting in cash looks like skill. QNT does neither.
 
 ## Things worth remembering
 
