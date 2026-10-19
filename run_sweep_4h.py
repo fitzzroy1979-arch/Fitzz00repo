@@ -50,6 +50,7 @@ import tempfile
 DEFAULT_SYMBOLS = [
     "BITSTAMP:BTCUSD", "COINBASE:XRPUSD", "COINBASE:FLRUSD",
     "OKX:ZBCNUSDT", "OKX:CCUSDT", "COINBASE:HBARUSD",
+    "COINBASE:QNTUSD",
 ]
 # Long-only args, and the same family with shorts enabled. The built-in
 # families short by simply dropping --long-only; the custom ones expose a
