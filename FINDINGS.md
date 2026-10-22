@@ -178,9 +178,92 @@ survive the addition.
 0.113; SPA 0.035 against RC 0.154; SPA 0.037 against RC 0.099. When they
 split, the conservative one was right every time.
 
+## What the losing trades have in common
+
+Added 2026-10-22, after the question was put directly: learn from the bad
+trades so the same ones are not taken again. `fitzz/journal.py` logs every
+round trip of a winning config with nine readings of the tape at its entry —
+trend distance and slope, RSI, bandwidth percentile, volume ratio, CMF, range
+location, z-score, trailing 5-bar return — and measures how far apart the
+winning and losing entries sit, in pooled standard deviations (Cohen's d).
+
+Mining losers for a pattern is the most reliable way to overfit there is, so
+every separation is measured on the first two thirds of trades and re-checked
+on the last third. `--journal` on the runner prints both columns;
+`--journal-dump` writes the trades to JSON.
+
+Across 1,243 trades, five families, seven symbols at 4h:
+
+**4 of 45 family/feature pairs separate in-sample and hold out of sample**,
+and no two families agree on which. breakout/CMF, confluence/RSI,
+follow_money/trend-slope, ma_cross/bandwidth — scattered, all d ≈ 0.2–0.4
+in-sample, nothing a filter could be built on.
+
+### The pooled result is a composition artifact
+
+Pool all 1,243 trades and five features separate cleanly and hold out of
+sample — z-score -0.351/-0.282, range location -0.339/-0.329, trailing
+return -0.306/-0.343, RSI -0.293/-0.215, CMF -0.206/-0.171. All negative:
+winners entered after weakness. It looks like the session's one real finding.
+
+It is not. The pool mixes families that enter at opposite ends of every one
+of those scales:
+
+| family | trades | win rate | mean z-score at entry |
+|---|---|---|---|
+| mean_revert | 207 | 71.5% | **-2.56** |
+| confluence | 211 | 48.3% | -0.12 |
+| ma_cross | 361 | 38.8% | +0.85 |
+| follow_money | 258 | 42.6% | +1.22 |
+| breakout | 206 | 43.7% | **+2.32** |
+
+So "winners entered low" is "mean_revert trades win more often" restated —
+and mean_revert loses money at a 71.5% win rate, which is the oldest lesson
+in this document. Two controls confirm it: drop mean_revert and z-score
+leaves the top five entirely (best remaining d_in 0.171, holding at 0.018);
+z-score each feature within its own family before pooling and every effect
+collapses below 0.19.
+
+**This is the shape to watch for.** A pooled comparison across groups that
+differ in both the feature and the outcome will separate them every time, and
+it survives a holdout, because composition is stable across time. The holdout
+does not catch this one. Only the control does.
+
+### The one thing left
+
+Bandwidth percentile at entry — the volatility regime — is the only feature
+that keeps its sign and rough size in all three views: pooled (+0.188/+0.104),
+pooled excluding mean_revert (+0.118/+0.114), and z-scored within family
+(+0.182/+0.121). Winners were entered when the market was moving. That is not
+a price prediction; it is "these are all breakout and trend strategies and
+they need movement to pay".
+
+Refusing entries below the 40th percentile of bandwidth raises mean per-trade
+return in four of five families, in-sample **and** out:
+
+| family | holdout mean/trade, unfiltered | at thr 0.4 |
+|---|---|---|
+| confluence | +3.25% | +7.84% |
+| ma_cross | +2.67% | +4.61% |
+| follow_money | +3.61% | +5.54% |
+| breakout | +2.83% | +4.47% |
+| mean_revert | +0.93% | +0.78% |
+
+First thing all session to improve out of sample. Three reasons it is not yet
+a result: total return falls at every threshold, because the filter removes
+more good trades than bad; the effect is **non-monotone** out of sample —
+breakout's holdout mean goes 4.47% at 0.4 to 0.08% at 0.5 and back to 0.61%
+at 0.6, and ma_cross 4.90% to 0.31% — which is what noise looks like and not
+what a regime effect looks like; and d ≈ 0.15 means the winning and losing
+distributions overlap by about 94%.
+
+Settling it means sweeping the families with the gate as a parameter, so the
+p-value pays for the threshold that was chosen by looking, then the cost scan
+and both tests. Until that runs it is a hypothesis, not a filter.
+
 ## Data bugs found along the way
 
-Six, all the same shape: a read that was short, stale or simply another
+Seven, all the same shape: a read that was short, stale or simply another
 symbol's, passing as valid. Each silently changed results rather than
 erroring.
 
@@ -197,6 +280,12 @@ erroring.
    gets the other's bars. Now an flock, so the second one errors.
 6. The sweep cache re-read any short series every run and took the longer of
    the two, so one cross-symbol read overwrote good CC data with BTC's.
+
+7. `trade_stats` walked only `col[i] > 0`, so under `--shorts` it counted
+   the long legs and reported them as the whole strategy. Every win rate and
+   payoff figure from a shorts run before 2026-10-22 describes half the
+   trades. It now shares `fitzz.journal`'s extractor with the journal, so the
+   two cannot disagree about what a trade is.
 
 Guards now check the data rather than the chart's description of itself: bar
 count against confirmed depth, price against a live quote, bar spacing

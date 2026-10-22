@@ -41,6 +41,7 @@ would otherwise look significant, since the correction always raises p.
 """
 
 import argparse
+import textwrap
 import json
 import os
 import subprocess
@@ -121,21 +122,21 @@ MA_DEFAULTS = ("2:40:2", "10:200:5", "0,0.001,0.0025,0.005,0.01")
 BREAKOUT_DEFAULTS = ("10:120:5", "5:60:5")
 
 
-def trade_stats(bars_path, family, label, cost_bps, shorts=False):
+def rebuild_positions(bars_path, family, label, shorts=False):
     """
-    Per-trade win/loss for the winning config, which the sweep does not
-    report -- it scores bars, not round trips.
+    (bars, position column) for one swept config, or (bars, None).
 
     Positions are rebuilt by running the same family builder and picking the
-    column whose label matches, so the logic cannot drift from what was
-    actually swept. A position held from bar t0 through t1 earns
-    close[t1+1]/close[t0], since the sweep's convention is that pos[t] earns
-    the t -> t+1 return. Costs are charged once each way.
+    column whose label matches, so nothing downstream can drift from what was
+    actually swept. Both the win/loss summary and the trade journal go
+    through here for that reason -- two separate reimplementations of "what
+    did this config hold" is exactly the kind of quiet disagreement that took
+    six data bugs to find the first time.
     """
     import numpy as np
     bars, _ = _read_cache(bars_path)      # same reader: the file carries meta
     if not bars:
-        return None
+        return [], None
     close = np.asarray([float(b["close"]) for b in bars], dtype=float)
 
     if family == "ma_cross":
@@ -164,33 +165,38 @@ def trade_stats(bars_path, family, label, cost_bps, shorts=False):
         pos, labels = (fm_family.build_shorts if shorts
                        else fm_family.build)(close, bars)
     if label not in labels:
-        return None
-    col = np.asarray(pos)[:, labels.index(label)]
+        return bars, None
+    return bars, np.asarray(pos)[:, labels.index(label)]
 
-    fee = cost_bps * 1e-4
-    wins = losses = 0
-    gains, drops = [], []
-    i, n = 0, len(col)
-    while i < n:
-        if col[i] > 0:
-            t0 = i
-            while i + 1 < n and col[i + 1] > 0:
-                i += 1
-            exit_i = min(i + 1, n - 1)
-            if exit_i > t0:
-                r = (close[exit_i] / close[t0] - 1) - 2 * fee
-                (gains if r > 0 else drops).append(r)
-                wins += r > 0
-                losses += r <= 0
-        i += 1
-    total = wins + losses
-    if not total:
+
+def trade_stats(bars_path, family, label, cost_bps, shorts=False):
+    """
+    Per-trade win/loss for the winning config, which the sweep does not
+    report -- it scores bars, not round trips.
+
+    Round trips come from fitzz.journal so that the summary and the journal
+    cannot disagree about what a trade is. The earlier version walked only
+    `col[i] > 0` and so counted nothing but the long legs: under --shorts the
+    win rate and payoff described half the strategy while appearing to
+    describe all of it.
+    """
+    from fitzz.journal import extract_trades
+
+    bars, col = rebuild_positions(bars_path, family, label, shorts)
+    if col is None:
         return None
+    trades = extract_trades(bars, [int(x) for x in col], cost_bps)
+    if not trades:
+        return None
+
+    gains = [t["ret"] for t in trades if t["ret"] > 0]
+    drops = [t["ret"] for t in trades if t["ret"] <= 0]
     return {
-        "trades": total,
-        "win_pct": 100.0 * wins / total,
+        "trades": len(trades),
+        "win_pct": 100.0 * len(gains) / len(trades),
         "avg_win": 100.0 * sum(gains) / len(gains) if gains else 0.0,
         "avg_loss": 100.0 * sum(drops) / len(drops) if drops else 0.0,
+        "shorts": sum(1 for t in trades if t["side"] < 0),
     }
 
 
@@ -341,6 +347,9 @@ def cost_scan(bars_path, family, levels, block, seed, shorts, holdout=0.33):
 
 
 def main(argv=None):
+    from fitzz.journal import extract_trades, render, separation
+
+
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS),
@@ -360,10 +369,26 @@ def main(argv=None):
     p.add_argument("--shorts", action="store_true",
                    help="Let every family take the mirror-image short as well as "
                         "the long (default long-only).")
+    p.add_argument("--journal", action="store_true",
+                   help="After each sweep, log every round trip of the winning "
+                        "config with the tape readings at its entry, and report "
+                        "what separates winners from losers -- measured on the "
+                        "first two thirds of trades and re-checked on the last "
+                        "third. Also pools trades per family across symbols.")
+    p.add_argument("--journal-dump", default=None, metavar="PATH",
+                   help="Write every journalled round trip to PATH as JSON, so "
+                        "the trades can be re-analysed without re-running the "
+                        "sweep. Implies --journal.")
+    p.add_argument("--journal-holdout", type=float, default=0.33,
+                   help="fraction of trades reserved from the separation "
+                        "measurement (default 0.33)")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--cache", default=os.path.join(tempfile.gettempdir(), "fitzz_sweep_bars"),
                    help="where fetched bars are cached")
     args = p.parse_args(argv)
+
+    if args.journal_dump:
+        args.journal = True
 
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
     families = args.family or sorted(FAMILIES)
@@ -406,6 +431,7 @@ def main(argv=None):
           f"{'hit%':>7}{'win%':>7}{'avgW%':>7}{'avgL%':>7}"
           f"{'p(RC)':>8}{'p(SPA)':>8}  block ok")
     rows = []
+    journals, by_family = [], {}
     for sym in symbols:
         try:
             path, n = fetch(sym, args.interval, args.bars, args.cache)
@@ -435,6 +461,17 @@ def main(argv=None):
                   f"{res.get('p_spa', float('nan')):>8.3f}  {ok}")
             rows.append((sym, fam, res.get("p_spa"), ts))
 
+            if args.journal:
+                bars, col = rebuild_positions(path, fam, res.get("label", ""),
+                                              args.shorts)
+                if col is not None:
+                    tr = extract_trades(bars, [int(x) for x in col],
+                                        args.cost_bps)
+                    for t in tr:
+                        t["symbol"] = sym
+                    journals.append((sym, fam, tr))
+                    by_family.setdefault(fam, []).extend(tr)
+
     pooled = [r[3] for r in rows if r[3]]
     if pooled:
         tw = sum(s["trades"] * s["win_pct"] / 100.0 for s in pooled)
@@ -445,6 +482,66 @@ def main(argv=None):
               f"of {tt} trades = {100.0 * tw / tt:.1f}% win")
         print(f"  trade-weighted average winner {aw:+.2f}%, average loser {al:+.2f}%, "
               f"payoff {abs(aw / al) if al else float('nan'):.2f}x")
+
+    if args.journal:
+        print("\n" + "=" * 72)
+        print("TRADE JOURNAL -- what separated the winners from the losers")
+        print("=" * 72)
+        print(textwrap.fill(
+            "d is the gap between winning and losing entries in pooled standard "
+            "deviations. 'd in' is measured on the first "
+            f"{100 * (1 - args.journal_holdout):.0f}% of trades and 'd out' on "
+            "the last "
+            f"{100 * args.journal_holdout:.0f}%, which that measurement never "
+            "saw. A feature that separates in-sample and collapses out of it "
+            "is the search fitting noise, not a property of a bad trade. Only "
+            "a 'yes' in the holds column is worth testing as an entry filter, "
+            "and even then it has to clear the cost scan and both p-value "
+            "tests before it means anything. The nine features are not "
+            "independent -- trailing return, RSI, z-score and range location "
+            "all partly restate recent price -- so read which dimension "
+            "separates, not how many did.", width=72))
+
+        for sym, fam, tr in journals:
+            print()
+            print(render(tr, f"{sym}  {fam}", args.journal_holdout))
+
+        for fam, tr in sorted(by_family.items()):
+            if len(tr) < 30:
+                continue
+            print()
+            print(render(tr, f"ALL SYMBOLS  {fam}  (pooled)",
+                         args.journal_holdout))
+
+        if args.journal_dump:
+            flat = [dict(t, family=fam) for sym, fam, ts in journals for t in ts]
+            with open(args.journal_dump, "w") as fh:
+                json.dump({"interval": args.interval,
+                           "cost_bps": args.cost_bps,
+                           "shorts": bool(args.shorts),
+                           "trades": flat}, fh, indent=1)
+            print(f"\n  wrote {len(flat)} trades to {args.journal_dump}")
+
+        every = [t for ts in by_family.values() for t in ts]
+        if every:
+            print()
+            print(render(every, "EVERYTHING  (all families, all symbols)",
+                         args.journal_holdout))
+            holds = 0
+            for fam, tr in by_family.items():
+                for r in separation(tr, args.journal_holdout)["rows"]:
+                    di, do = r["d_in"], r["d_out"]
+                    if (di is not None and do is not None and abs(di) >= 0.2
+                            and di * do > 0 and abs(do) >= abs(di) / 2):
+                        holds += 1
+            tested = len(by_family) * 9
+            print(f"  {holds} of {tested} family/feature pairs separate "
+                  f"in-sample and hold out of sample.")
+            if not holds:
+                print("  Nothing about the losing entries is stable. There is no "
+                      "filter to\n  build here -- the losers are not a kind of "
+                      "trade, they are the same\n  trades on the other side of "
+                      "a coin.")
 
     live = [r for r in rows if r[2] is not None]
     if live:
