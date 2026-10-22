@@ -315,6 +315,51 @@ So the journal's one surviving lead is closed. It was a real in-sample
 effect, reproducible, directionally consistent across families and holdouts
 -- and still nothing, once made to pay for itself.
 
+### Gated, with shorts
+
+Run 2026-10-22, `--vol-gate --shorts`, same 35 pairs. This produced the
+**lowest p(SPA) of the entire search**: ZBCN mean_revert at 0.007, with the
+block check passing. Its Reality Check was 0.203.
+
+Reserve a third of the data and it is 0.124:
+
+| bps | in-sample | holdout | p(SPA) | p(RC) |
+|---|---|---|---|---|
+| 10 | +0.000590 | +0.000552 | **0.124** | 0.422 |
+| 25 | +0.000558 | +0.000505 | 0.164 | 0.468 |
+| 50 | +0.000505 | +0.000426 | 0.231 | 0.544 |
+| 100 | +0.000399 | +0.000268 | 0.436 | 0.700 |
+
+0.007 to 0.124 on the same data, the only difference being that a third of
+the window was withheld from the search. The significance was the full
+window, not the signal.
+
+Worth noting what is unusual here, because it is the most seductive row in
+this document: the holdout is **positive at every cost level** and decays
+gracefully rather than collapsing. That is the profile a real edge would
+have. It is also what p = 0.124 and RC = 0.422 mean in practice -- out of
+~20,000 configs, the best one on a third of the data looking decent on the
+rest is roughly what noise produces. This is precisely the case the earlier
+rule was written for: a holdout is only readable after a p-value is low, and
+this one is not. The second candidate behaves the same way -- FLR confluence
+shorts, holdout +0.000246 at 10 bps, SPA 0.139, never clearing.
+
+The threshold scatter repeats, and the no-gate option wins more often with
+shorts than it did long-only:
+
+| threshold | long-only | with shorts |
+|---|---|---|
+| 0.0 (no gate) | 5 | **11** |
+| 0.2 | 9 | 8 |
+| 0.3 | 4 | 3 |
+| 0.4 | 2 | 3 |
+| 0.5 | 7 | 6 |
+| 0.6 | 8 | 4 |
+
+Given a free choice in the same grid, 11 of 35 fits now prefer no gate at
+all. Two independent runs, both scattered, with the mode moving between them.
+The gate is closed in both directions.
+
 ## Data bugs found along the way
 
 Seven, all the same shape: a read that was short, stale or simply another
