@@ -1,25 +1,44 @@
 # Strategy search: results
 
-What was tested, what was found, and what to not repeat. Dated 2026-10-17.
+What was tested, what was found, and what to not repeat. First written
+2026-10-17; p-values re-measured 2026-10-20 on freshly fetched bars (through
+2026-10-20 04:00) after clearing the cache.
 
 ## The result
 
 Nothing tested here has a detectable edge on these symbols.
 
-Five strategy families, long and short, ten symbols, two timeframes, four
-cost levels — roughly 140 significance sweeps over ~20,000 parameter
-configurations each. Two results ever cleared p ≤ 0.05:
+Five strategy families, long and short, eleven symbols, three timeframes,
+four cost levels — roughly 140 significance sweeps over ~20,000 parameter
+configurations each. Five results ever cleared p ≤ 0.05, and none of them
+survived a second look:
 
-| candidate | p(SPA) | status |
-|---|---|---|
-| ZBCN mean_revert, 4h long | 0.021 | holdout at that config: +0.000517 → **-0.000002** per bar |
-| ZBCN mean_revert, 1h short | 0.037 | costs: gone by 25 bps, holdout -0.000001 at 100 |
-| FLR confluence, 4h short | 0.033 | RC 0.154; holdout 82% decayed; absent on unseen symbols |
-| QNT mean_revert, 4h long | 0.031 | drops to 0.127 once a third is held out; RC never clears |
-| CC mean_revert, 4h short | 0.038 | holdout **-0.000879**; gone by 25 bps |
+| candidate | p(SPA) 10-17 | p(SPA) 10-20 | status |
+|---|---|---|---|
+| ZBCN mean_revert, 4h long | 0.021 | **0.018** | RC 0.117 → 0.093; holdout at that config +0.000517 → **-0.000002** per bar |
+| QNT mean_revert, 4h long | 0.031 | **0.046** | drops to 0.127 once a third is held out; RC never clears |
+| FLR confluence, 4h short | 0.033 | **0.030** | RC 0.154; holdout 82% decayed; absent on unseen symbols |
+| CC mean_revert, 4h short | 0.038 | **0.024** | holdout **-0.000884**; gone by 50 bps |
+| ZBCN mean_revert, 1h short | 0.037 | not re-run | costs: gone by 25 bps, holdout -0.000001 at 100 |
 
-Across 30 sweeps, chance alone predicts ~1.5 results under 5%. Finding one
-or two is not a finding.
+Chance alone puts 5% of sweeps under p = 0.05 — about 7 of the ~140 run
+here. Five hits is *below* what noise predicts, not above it. Finding a
+handful of sub-5% results in a search this wide is the expected outcome of
+searching, and the only honest reading of the table.
+
+### The p-values are not stable
+
+Three extra days of bars — about 18 of 1,500 at 4h, roughly 1% more data —
+moved every candidate: QNT 0.031 → 0.046, CC 0.038 → 0.024, ZBCN 0.021 →
+0.018, FLR 0.033 → 0.030. QNT nearly crossed out of significance and CC
+nearly halved on a sample change too small to carry real information.
+
+That instability is itself a result, and it argues the same way the holdouts
+do. A p-value that swings 50% on 1% more data is measuring the particular
+bars it was handed, not a property of the instrument. It also means any
+single number in this document should be read as "about this, on that pull",
+and a candidate that only ever sits near 0.05 is indistinguishable from one
+sitting at 0.5.
 
 ### The one result costs do not kill
 
@@ -31,9 +50,9 @@ rather than rounding down to "nothing worked".
 
 It is still not tradable evidence:
 
-* Reality Check never clears it — 0.117 at best, at every cost level. The two
-  tests have split on every candidate and the conservative one has been right
-  each time.
+* Reality Check never clears it — 0.093 at best on the fresh pull (0.117 on
+  the first), at every cost level. The two tests have split on every candidate
+  and the conservative one has been right each time.
 * At the 10 bps winner specifically the holdout is -0.000002: nothing. The
   positive holdouts at 25–100 bps belong to a different, stricter config.
 * One result from 30 sweeps is below the ~1.5 chance predicts.
@@ -49,8 +68,8 @@ attention than one. The tally:
 
 | | |
 |---|---|
-| clears 5% on SPA, full window | **2** — ZBCN 0.021, QNT 0.031 |
-| clears Reality Check | **0** — best is 0.117 |
+| clears 5% on SPA, full window | **2** — ZBCN 0.018, QNT 0.046 |
+| clears Reality Check | **0** — best is 0.093 |
 | fails | 9 — BTC, XRP, FLR, CC, HBAR, SOL, ADA, LINK, DOT |
 
 Two of eleven, against ~1.8 expected by chance across 35 sweeps. Both are
@@ -61,7 +80,8 @@ and that is exactly where a modelled 10 bps round-turn is least believable.
 QNT's holdout is better behaved than most — positive at every cost level,
 reaching roughly zero only at 100 bps — but its p-value falls from 0.031 to
 0.127 as soon as a third of the data is reserved, so the significance was
-coming from the full window rather than from the signal.
+coming from the full window rather than from the signal. On the fresh pull it
+starts from 0.046 instead, which is the kind of movement described above.
 
 ### What the scan shows about everything else
 
@@ -69,6 +89,30 @@ Nearly every one of the 30 pairs posts a healthy in-sample edge, +0.0001 to
 +0.0006 per bar, with a **negative holdout**. In-sample positive and
 out-of-sample negative, repeated across 30 independent symbol/family pairs,
 is the clearest single picture of what a parameter search does to this data.
+
+### The same scan with shorts enabled
+
+Re-run 2026-10-20 on fresh bars, all five families across the seven-symbol
+watchlist — 35 pairs. **34 lose significance by 10 bps.** The one exception is
+CC mean_revert, clearing at 10 bps (0.024) and 25 bps (0.048) and gone by 50,
+with a holdout of **-0.000884** — it fails on untouched data before cost is
+even the question.
+
+So enabling shorts removes the single cost-robust result the long-only scan
+had. The largest in-sample edges in the whole shorts run, with their holdouts:
+
+| pair | in-sample @ 10 bps | holdout |
+|---|---|---|
+| HBAR ma_cross | +0.000840 | -0.000191 |
+| ZBCN ma_cross | +0.000654 | -0.000225 |
+| FLR ma_cross | +0.000653 | +0.000136 |
+| HBAR breakout | +0.000638 | -0.000040 |
+| XRP ma_cross | +0.000624 | +0.000367 |
+
+Every one is noise by p-value (0.273–0.809) and most flip negative out of
+sample. QNT breakout is the inverse case — +0.000200 in sample against
++0.000641 held out, at p 0.642–0.706 — which is the same luck read from the
+other end.
 
 ## What was tested
 
@@ -125,7 +169,10 @@ the spread it will actually pay, whatever its p-value says.
 **Shorts did not help.** On six symbols only FLR improved. ZBCN also fell
 over the window and shorting it took -2.68% to -88.73% at a 96% drawdown — it
 declined by chopping rather than trending, so every false signal cost twice.
-A falling asset is not a shortable one.
+A falling asset is not a shortable one. Under the cost scan it is worse than
+neutral: 34 of 35 pairs lose significance by 10 bps with shorts on, against
+29 of 30 long-only, and the one long-only result that survived cost does not
+survive the addition.
 
 **SPA and Reality Check disagreed on every candidate.** SPA 0.021 against RC
 0.113; SPA 0.035 against RC 0.154; SPA 0.037 against RC 0.099. When they
