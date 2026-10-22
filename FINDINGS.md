@@ -360,6 +360,54 @@ Given a free choice in the same grid, 11 of 35 fits now prefer no gate at
 all. Two independent runs, both scattered, with the mode moving between them.
 The gate is closed in both directions.
 
+### Gated, 1h — the only time both tests ever agreed
+
+Run 2026-10-22, `--vol-gate --interval 1h`, long-only, 35 pairs. ZBCN
+mean_revert returned **SPA 0.004 and Reality Check 0.034**, block check
+passing. That is the one and only occasion in this entire search that RC fell
+below 5%. Reality Check is the test that has killed every candidate, and it
+had never gone below 0.093 before.
+
+It does not survive a holdout either:
+
+| bps | in-sample | holdout | p(SPA) | p(RC) |
+|---|---|---|---|---|
+| 10 | +0.000178 | **+0.000184** | 0.040 | 0.107 |
+| 25 | +0.000136 | +0.000093 | **0.205** | 0.290 |
+| 50 | +0.000111 | +0.000025 | 0.376 | 0.418 |
+| 100 | +0.000069 | -0.000005 | 0.650 | 0.786 |
+
+Reserve a third and RC goes from 0.034 to 0.107 — the clearance was the full
+window. Give it full credit for what it does do, because nothing else here
+has: at 10 bps the holdout is **+0.000184 against an in-sample +0.000178**.
+Not merely positive, not merely gracefully decaying — *identical*, no decay at
+all, which is what a genuine edge looks like and what no other row in this
+document shows.
+
+And it is still dead, on the question that should have been asked first.
+Significance is gone by 25 bps, and the trades say why: at 1h the winners
+average +1.5% and the losers -1.7%. A 10 bps round turn is 0.2% — 13% of the
+average winner. At 25 bps it is a third of it. ZBCN is the least liquid
+instrument in the set; its real round-turn cost at 1h is not 10 bps. The edge
+exists only at a cost that cannot be obtained on the only instrument that has
+it.
+
+Third replication of the scatter, and the mode moves again:
+
+| threshold | 4h long | 4h shorts | **1h long** |
+|---|---|---|---|
+| 0.0 (no gate) | 5 | 11 | **3** |
+| 0.2 | 9 | 8 | 4 |
+| 0.3 | 4 | 3 | 6 |
+| 0.4 | 2 | 3 | 7 |
+| 0.5 | 7 | 6 | **10** |
+| 0.6 | 8 | 4 | 5 |
+
+Three independent runs, three different modes (0.2, 0.0, 0.5), never
+clustering. Also note the shorter calendar window: 5,000 bars at 1h is about
+208 days against 833 at 4h, so this is one regime rather than several, which
+is its own reason for caution regardless of the p-value.
+
 ## Data bugs found along the way
 
 Seven, all the same shape: a read that was short, stale or simply another
