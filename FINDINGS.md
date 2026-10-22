@@ -392,21 +392,51 @@ instrument in the set; its real round-turn cost at 1h is not 10 bps. The edge
 exists only at a cost that cannot be obtained on the only instrument that has
 it.
 
-Third replication of the scatter, and the mode moves again:
+Note the shorter calendar window: 5,000 bars at 1h is about 208 days against
+833 at 4h, so this is one regime rather than several, which is its own reason
+for caution regardless of the p-value.
 
-| threshold | 4h long | 4h shorts | **1h long** |
-|---|---|---|---|
-| 0.0 (no gate) | 5 | 11 | **3** |
-| 0.2 | 9 | 8 | 4 |
-| 0.3 | 4 | 3 | 6 |
-| 0.4 | 2 | 3 | 7 |
-| 0.5 | 7 | 6 | **10** |
-| 0.6 | 8 | 4 | 5 |
+### Gated, 1h, with shorts — and the scatter completed
 
-Three independent runs, three different modes (0.2, 0.0, 0.5), never
-clustering. Also note the shorter calendar window: 5,000 bars at 1h is about
-208 days against 833 at 4h, so this is one regime rather than several, which
-is its own reason for caution regardless of the p-value.
+Run 2026-10-22, the fourth corner. ZBCN mean_revert again, SPA 0.018 and RC
+0.056, over 426 trades. Adding shorts made it worse than long-only on both
+tests (0.004 and 0.034), consistent with everything else here: shorts have
+never improved a candidate in this search.
+
+With a third held out it behaves exactly as the long-only version did:
+
+| bps | in-sample | holdout | p(SPA) | p(RC) |
+|---|---|---|---|---|
+| 10 | +0.000282 | +0.000221 | 0.042 | 0.108 |
+| 25 | +0.000244 | +0.000182 | **0.067** | 0.189 |
+| 50 | +0.000180 | +0.000117 | 0.172 | 0.422 |
+| 100 | +0.000053 | -0.000054 | 0.826 | 0.964 |
+
+SPA clears at 10 bps, RC does not, gone by 25. The full-window RC of 0.056
+becomes 0.108 once a third is reserved — the same lesson as the long-only
+run: **every RC clearance this search has produced came from the full
+window.** Holdout retention is again good, 78% of the in-sample edge.
+
+**All four corners of the gate, and the scatter is complete:**
+
+| threshold | 4h long | 4h shorts | 1h long | 1h shorts |
+|---|---|---|---|---|
+| 0.0 (no gate) | 5 | **11** | 3 | 7 |
+| 0.2 | **9** | 8 | 4 | 4 |
+| 0.3 | 4 | 3 | 6 | 4 |
+| 0.4 | 2 | 3 | 7 | 3 |
+| 0.5 | 7 | 6 | **10** | 5 |
+| 0.6 | 8 | 4 | 5 | **12** |
+
+Four independent runs of 35 fits each, four different modes — 0.2, 0.0, 0.5,
+0.6 — spanning the whole grid end to end, and 0.4, the value the journal
+pointed at, is a mode in none of them. 140 fits chose a threshold and no two
+runs agreed on what it should be.
+
+That is the final word on the gate, and it is a better one than any p-value:
+the parameter has no stable optimum, so there is nothing there to optimise.
+The journal found a real in-sample pattern, the sweep priced it, and the
+price was higher than the pattern was worth.
 
 ## Data bugs found along the way
 
