@@ -167,6 +167,14 @@ def rolling_min(x, w):
     return out
 
 
+# The built-in grids, named once. run_sweep_4h and gated_family rebuild these
+# same families to recover a winning config, and three copies of "2:40:2" is
+# three chances for one of them to drift out of step with the sweep it claims
+# to be reproducing.
+MA_GRID = ("2:40:2", "10:200:5", "0,0.001,0.0025,0.005,0.01")
+BREAKOUT_GRID = ("10:120:5", "5:60:5")
+
+
 def ma_cross_family(close, fasts, slows, threshs, long_only=False):
     """SMA crossover with a deadband. Positions in {-1, 0, +1}."""
     mas = {w: rolling_mean(close, w) for w in sorted(set(fasts) | set(slows))}
@@ -671,11 +679,15 @@ def main(argv=None):
 
     fam = p.add_argument_group("strategy universe")
     fam.add_argument("--family", choices=["ma_cross", "breakout"], default="ma_cross")
-    fam.add_argument("--fast", default="2:40:2", help="fast SMA grid (default 2:40:2)")
-    fam.add_argument("--slow", default="10:200:5", help="slow SMA grid (default 10:200:5)")
-    fam.add_argument("--thresh", default="0,0.001,0.0025,0.005,0.01", help="deadband grid")
-    fam.add_argument("--entry", default="10:120:5", help="breakout entry lookback grid")
-    fam.add_argument("--exit", default="5:60:5", help="breakout exit lookback grid")
+    fam.add_argument("--fast", default=MA_GRID[0],
+                     help=f"fast SMA grid (default {MA_GRID[0]})")
+    fam.add_argument("--slow", default=MA_GRID[1],
+                     help=f"slow SMA grid (default {MA_GRID[1]})")
+    fam.add_argument("--thresh", default=MA_GRID[2], help="deadband grid")
+    fam.add_argument("--entry", default=BREAKOUT_GRID[0],
+                     help="breakout entry lookback grid")
+    fam.add_argument("--exit", default=BREAKOUT_GRID[1],
+                     help="breakout exit lookback grid")
     fam.add_argument("--long-only", action="store_true", help="no short positions")
     fam.add_argument("--strategy", metavar="FILE.py:FUNC",
                      help="custom family: FUNC(close) -> (positions (T,K), labels)")

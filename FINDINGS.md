@@ -257,9 +257,63 @@ at 0.6, and ma_cross 4.90% to 0.31% — which is what noise looks like and not
 what a regime effect looks like; and d ≈ 0.15 means the winning and losing
 distributions overlap by about 94%.
 
-Settling it means sweeping the families with the gate as a parameter, so the
-p-value pays for the threshold that was chosen by looking, then the cost scan
-and both tests. Until that runs it is a hypothesis, not a filter.
+### Settled: the gate does not pay for itself
+
+Run 2026-10-22. `fitzz/gated_family.py` crosses all five families with the
+gate, sweeping the threshold over 0/0.2/0.3/0.4/0.5/0.6 instead of choosing
+it. The gate is tested once, at entry, and a trade already open is seen
+through -- that is the hypothesis the journal measured. **0.0 is in the grid**,
+so the ungated family competes inside the same correction and a gated winner
+has to beat the version of itself that never refused a trade.
+`--vol-gate` on the runner.
+
+The gate wins the grid **30 times out of 35**. It does improve in-sample
+return, just as the journal said. And it still makes everything worse:
+
+| | ungated | gated |
+|---|---|---|
+| lowest p(SPA) over 35 sweeps | 0.018 | **0.023** |
+| sweeps significant at 5% | 2 | **1** |
+| QNT mean_revert | 0.046 | **0.127** |
+
+With a third of the data held out and costs charged, the one survivor goes
+the same way — ZBCN mean_revert, which ungated held SPA 0.011 at 10 bps:
+
+| bps | in-sample | holdout | p(SPA) | p(RC) |
+|---|---|---|---|---|
+| 10 | +0.000517 | -0.000032 | **0.056** | 0.137 |
+| 25 | +0.000502 | +0.000111 | 0.058 | 0.150 |
+| 50 | +0.000480 | +0.000085 | 0.070 | 0.170 |
+| 100 | +0.000435 | +0.000034 | 0.096 | 0.228 |
+
+It no longer clears 5% at any cost level. QNT gated sits at 0.230. The gate
+multiplied each grid roughly sixfold -- ma_cross went from 3,339 configs to
+about 20,000 -- and the correction for that search costs more than the gate
+returns. An improvement that cannot pay for the cost of having looked for it
+is not an improvement.
+
+**The tell was in the thresholds.** If a volatility regime genuinely marked
+bad entries, the winning threshold would cluster. It does not:
+
+| threshold | times it won |
+|---|---|
+| 0.0 (no gate) | 5 |
+| 0.2 | 9 |
+| 0.3 | 4 |
+| 0.4 | 2 |
+| 0.5 | 7 |
+| 0.6 | 8 |
+
+Near-uniform across the grid, and 0.4 -- the value the journal pointed at --
+is the *rarest* winner of the five gates. Each symbol and family found
+whichever threshold happened to delete its own worst trades. That is what
+fitting looks like from the inside, and it is worth more than the p-value:
+a parameter whose best value is unstable across 35 independent fits is not
+measuring anything about the market.
+
+So the journal's one surviving lead is closed. It was a real in-sample
+effect, reproducible, directionally consistent across families and holdouts
+-- and still nothing, once made to pay for itself.
 
 ## Data bugs found along the way
 

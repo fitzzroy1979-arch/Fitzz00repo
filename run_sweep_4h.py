@@ -70,6 +70,20 @@ FAMILIES_SHORT = {
     "mean_revert": ["--strategy", "fitzz/mr_family.py:build_shorts"],
     "confluence": ["--strategy", "fitzz/conf_family.py:build_shorts"],
 }
+# The same five, each crossed with the volatility-regime entry gate. The gate
+# threshold is swept rather than chosen, and 0.0 (no gate) is in the grid, so
+# a gated winner has beaten the ungated version of itself inside the same
+# multiple-comparisons correction.
+FAMILIES_GATED = {
+    "ma_cross": ["--strategy", "fitzz/gated_family.py:build_ma_cross"],
+    "breakout": ["--strategy", "fitzz/gated_family.py:build_breakout"],
+    "follow_money": ["--strategy", "fitzz/gated_family.py:build_follow_money"],
+    "mean_revert": ["--strategy", "fitzz/gated_family.py:build_mean_revert"],
+    "confluence": ["--strategy", "fitzz/gated_family.py:build_confluence"],
+}
+FAMILIES_GATED_SHORT = {
+    k: [v[0], v[1] + "_shorts"] for k, v in FAMILIES_GATED.items()
+}
 REPO = os.path.dirname(os.path.abspath(__file__))
 
 # One bridge for the whole run, not one per symbol. TradingViewBridge keeps the
@@ -118,8 +132,7 @@ def _spacing_ok(bars, interval):
 
 # Mirrors fitzz.sweep's own argparse defaults; rebuilding the winning config
 # means reusing the same grid the sweep searched.
-MA_DEFAULTS = ("2:40:2", "10:200:5", "0,0.001,0.0025,0.005,0.01")
-BREAKOUT_DEFAULTS = ("10:120:5", "5:60:5")
+from fitzz.sweep import BREAKOUT_GRID as BREAKOUT_DEFAULTS, MA_GRID as MA_DEFAULTS
 
 
 def rebuild_positions(bars_path, family, label, shorts=False):
@@ -138,6 +151,21 @@ def rebuild_positions(bars_path, family, label, shorts=False):
     if not bars:
         return [], None
     close = np.asarray([float(b["close"]) for b in bars], dtype=float)
+
+    # A gated winner's label carries its threshold, so the gated grid is the
+    # only one that can contain it. Dispatching on the label rather than on a
+    # flag means a journal or a win/loss summary reproduces whatever config it
+    # was handed, without the caller having to remember how it was produced.
+    if "volgate=" in label:
+        from fitzz import gated_family
+        fn = getattr(gated_family,
+                     f"build_{family}{'_shorts' if shorts else ''}")
+        pos, labels = (fn(close, bars) if family in ("follow_money",
+                                                     "confluence")
+                       else fn(close))
+        if label not in labels:
+            return bars, None
+        return bars, np.asarray(pos)[:, labels.index(label)]
 
     if family == "ma_cross":
         from fitzz.sweep import ma_cross_family, parse_range
@@ -281,12 +309,17 @@ def fetch(symbol, interval, bars, cache):
     return path, len(fresh)
 
 
-def sweep(bars_path, family, cost_bps, block, seed, shorts=False):
+def sweep(bars_path, family, cost_bps, block, seed, shorts=False,
+          vol_gate=False):
     """One sweep. Returns the tool's own result dict, or None if it bailed."""
     with tempfile.NamedTemporaryFile("r", suffix=".json", delete=False) as out:
         out_path = out.name
+    if vol_gate:
+        spec = (FAMILIES_GATED_SHORT if shorts else FAMILIES_GATED)[family]
+    else:
+        spec = (FAMILIES_SHORT if shorts else FAMILIES)[family]
     cmd = [sys.executable, "-m", "fitzz", "sweep", "--json", bars_path,
-           *(FAMILIES_SHORT if shorts else FAMILIES)[family],
+           *spec,
            "--objective", "return",
            "--cost-bps", str(cost_bps), "--seed", str(seed),
            "--json-out", out_path]
@@ -306,7 +339,8 @@ def sweep(bars_path, family, cost_bps, block, seed, shorts=False):
             os.unlink(out_path)
 
 
-def cost_scan(bars_path, family, levels, block, seed, shorts, holdout=0.33):
+def cost_scan(bars_path, family, levels, block, seed, shorts, holdout=0.33,
+              vol_gate=False):
     """
     Re-run one sweep across a range of transaction costs.
 
@@ -322,8 +356,12 @@ def cost_scan(bars_path, family, levels, block, seed, shorts, holdout=0.33):
     import re
     rows = []
     for bps in levels:
+        if vol_gate:
+            spec = (FAMILIES_GATED_SHORT if shorts else FAMILIES_GATED)[family]
+        else:
+            spec = (FAMILIES_SHORT if shorts else FAMILIES)[family]
         cmd = [sys.executable, "-m", "fitzz", "sweep", "--json", bars_path,
-               *(FAMILIES_SHORT if shorts else FAMILIES)[family],
+               *spec,
                "--objective", "return", "--cost-bps", str(bps),
                "--holdout", str(holdout), "--seed", str(seed)]
         if block:
@@ -375,6 +413,11 @@ def main(argv=None):
                         "what separates winners from losers -- measured on the "
                         "first two thirds of trades and re-checked on the last "
                         "third. Also pools trades per family across symbols.")
+    p.add_argument("--vol-gate", action="store_true",
+                   help="Sweep each family crossed with a volatility-regime "
+                        "entry gate, the threshold swept over "
+                        "0/0.2/0.3/0.4/0.5/0.6 rather than chosen. 0.0 is the "
+                        "ungated family, so the gate has to beat it.")
     p.add_argument("--journal-dump", default=None, metavar="PATH",
                    help="Write every journalled round trip to PATH as JSON, so "
                         "the trades can be re-analysed without re-running the "
@@ -408,7 +451,7 @@ def main(argv=None):
                       f"{'p(SPA)':>9}{'p(RC)':>8}  winning config")
                 dead = None
                 for r in cost_scan(path, fam, levels, args.block, args.seed,
-                                   args.shorts):
+                                   args.shorts, vol_gate=args.vol_gate):
                     ins = f"{r['in_sample']:+.6f}" if r["in_sample"] is not None else "-"
                     hld = f"{r['holdout']:+.6f}" if r["holdout"] is not None else "-"
                     spa = f"{r['p_spa']:.3f}" if r["p_spa"] is not None else "-"
@@ -440,7 +483,7 @@ def main(argv=None):
             continue
         for fam in families:
             res = sweep(path, fam, args.cost_bps, args.block, args.seed,
-                        shorts=args.shorts)
+                        shorts=args.shorts, vol_gate=args.vol_gate)
             if "error" in res:
                 print(f"{sym:<20}{fam:<14}{n:>6}  {res['error']}")
                 continue
