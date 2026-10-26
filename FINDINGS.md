@@ -296,16 +296,48 @@ distributions overlap by about 94%.
 
 ### Settled: the gate does not pay for itself
 
-Run 2026-10-22. `fitzz/gated_family.py` crosses all five families with the
-gate, sweeping the threshold over 0/0.2/0.3/0.4/0.5/0.6 instead of choosing
-it. The gate is tested once, at entry, and a trade already open is seen
-through -- that is the hypothesis the journal measured. **0.0 is in the grid**,
-so the ungated family competes inside the same correction and a gated winner
-has to beat the version of itself that never refused a trade.
-`--vol-gate` on the runner.
+`fitzz/gated_family.py` crosses all five families with the gate, sweeping the
+threshold over 0/0.2/0.3/0.4/0.5/0.6 instead of choosing it. The gate is
+tested once, at entry, and a trade already open is seen through -- that is the
+hypothesis the journal measured. **0.0 is in the grid**, so the ungated family
+competes inside the same correction and a gated winner has to beat the version
+of itself that never refused a trade. `--vol-gate` on the runner.
 
-The gate wins the grid **30 times out of 35**. It does improve in-sample
-return, just as the journal said. And it still makes everything worse:
+#### What the gate costs, with the strategy held fixed
+
+Run 2026-10-26, gated and ungated against the *same cached bars*. On ZBCN
+mean_revert -- the only reproducible result in this search -- the sweep
+examined all six thresholds and chose **`volgate=0`**, no gate, at every cost
+level. So the winning strategy is identical in the two runs, bar for bar, and
+the only difference between the columns below is that one grid is six times
+larger than the other:
+
+| bps | in-sample | holdout | SPA ungated | SPA gated | RC ungated | RC gated |
+|---|---|---|---|---|---|---|
+| 10 | +0.000517 | +0.000051 | **0.014** | 0.035 | 0.124 | 0.148 |
+| 25 | +0.000502 | +0.000193 | 0.016 | 0.045 | 0.137 | 0.162 |
+| 50 | +0.000480 | +0.000166 | 0.019 | **0.054** | 0.155 | 0.186 |
+| 100 | +0.000435 | +0.000111 | 0.023 | 0.074 | 0.191 | 0.243 |
+
+The returns are bit-identical at all four cost levels. Nothing about the
+strategy changed. And that alone moved ZBCN from the tool's *"survives every
+cost level tested"* to *"significance is gone by 50 bps"*, with p(SPA) up by a
+factor of 2.5. Over the whole run, lowest p(SPA) 0.016 → 0.047, significant
+sweeps 2 → 1, QNT mean_revert 0.019 → 0.060.
+
+**This is the price of looking, measured on its own.** Usually a wider search
+is entangled with whatever the search found, and the two cannot be separated.
+Here the search found nothing -- it rejected the gate outright -- so the entire
+p-value movement is the multiple-comparisons correction and nothing else. A
+6x grid cost the best result in ~280 sweeps its cost robustness without
+changing a single trade. Any future idea that widens a grid should be read
+against this number before it is read against its own backtest.
+
+#### The earlier runs said the same thing less cleanly
+
+Run 2026-10-22, on that pull's bars, the gate won the grid **30 times out of
+35**. It does improve in-sample return, just as the journal said. And it still
+made everything worse:
 
 | | ungated | gated |
 |---|---|---|
