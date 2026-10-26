@@ -1,8 +1,9 @@
 # Strategy search: results
 
 What was tested, what was found, and what to not repeat. First written
-2026-10-17; p-values re-measured 2026-10-20 on freshly fetched bars (through
-2026-10-20 04:00) after clearing the cache.
+2026-10-17; p-values re-measured on freshly fetched bars on 2026-10-20 and
+again on 2026-10-26, so three independent pulls now stand behind the
+candidate table.
 
 ## The result
 
@@ -13,13 +14,13 @@ four cost levels — roughly 140 significance sweeps over ~20,000 parameter
 configurations each. Five results ever cleared p ≤ 0.05, and none of them
 survived a second look:
 
-| candidate | p(SPA) 10-17 | p(SPA) 10-20 | status |
-|---|---|---|---|
-| ZBCN mean_revert, 4h long | 0.021 | **0.018** | RC 0.117 → 0.093; holdout at that config +0.000517 → **-0.000002** per bar |
-| QNT mean_revert, 4h long | 0.031 | **0.046** | drops to 0.127 once a third is held out; RC never clears |
-| FLR confluence, 4h short | 0.033 | **0.030** | RC 0.154; holdout 82% decayed; absent on unseen symbols |
-| CC mean_revert, 4h short | 0.038 | **0.024** | holdout **-0.000884**; gone by 50 bps |
-| ZBCN mean_revert, 1h short | 0.037 | not re-run | costs: gone by 25 bps, holdout -0.000001 at 100 |
+| candidate | 10-17 | 10-20 | 10-26 | status |
+|---|---|---|---|---|
+| ZBCN mean_revert, 4h long | 0.021 | 0.018 | **0.016** | the one survivor; RC never clears (0.124 at best) |
+| QNT mean_revert, 4h long | 0.031 | 0.046 | **0.019** | 0.103 once a third is held out; RC never clears |
+| FLR confluence, 4h short | 0.033 | 0.030 | not re-run | RC 0.154; holdout 82% decayed; absent on unseen symbols |
+| CC mean_revert, 4h short | 0.038 | 0.024 | **0.473** | holdout -0.000884; gone by 50 bps |
+| ZBCN mean_revert, 1h short | 0.037 | not re-run | 0.018 gated | costs: gone by 25 bps |
 
 Chance alone puts 5% of sweeps under p = 0.05 — about 7 of the ~140 run
 here. Five hits is *below* what noise predicts, not above it. Finding a
@@ -33,12 +34,48 @@ moved every candidate: QNT 0.031 → 0.046, CC 0.038 → 0.024, ZBCN 0.021 →
 0.018, FLR 0.033 → 0.030. QNT nearly crossed out of significance and CC
 nearly halved on a sample change too small to carry real information.
 
+The third pull on 2026-10-26 says the same thing more loudly. QNT went
+0.046 → **0.019**, a halving in the other direction on six days of data, and
+CC collapsed from 0.024 to **0.473** — from apparently significant to
+nothing, on a window that grew by 2%. Only ZBCN sat still, 0.021 → 0.018 →
+0.016 across all three.
+
 That instability is itself a result, and it argues the same way the holdouts
 do. A p-value that swings 50% on 1% more data is measuring the particular
 bars it was handed, not a property of the instrument. It also means any
 single number in this document should be read as "about this, on that pull",
 and a candidate that only ever sits near 0.05 is indistinguishable from one
 sitting at 0.5.
+
+### Three pulls in, only one candidate is reproducible
+
+Of the five that ever cleared 5%, four move far enough between pulls to be
+unreadable. ZBCN mean_revert at 4h long is the exception, and on 2026-10-26
+it did something no other result here has managed — survived the cost scan at
+**every** level with a positive holdout at each:
+
+| bps | in-sample | holdout | p(SPA) | p(RC) |
+|---|---|---|---|---|
+| 10 | +0.000517 | +0.000051 | **0.014** | 0.124 |
+| 25 | +0.000502 | +0.000193 | 0.016 | 0.137 |
+| 50 | +0.000480 | +0.000166 | 0.019 | 0.155 |
+| 100 | +0.000435 | +0.000111 | 0.023 | 0.191 |
+
+The tool's own verdict is "survives every cost level tested". The other six
+mean_revert pairs in the same run all lose significance by 10 bps, QNT among
+them.
+
+That is a real distinction and it should not be rounded down. Three
+independent pulls, four cost levels, positive holdouts throughout, p(SPA)
+never above 0.023. Nothing else in ~245 sweeps has that profile.
+
+It is still not tradable, on the same two grounds as ever. **Reality Check
+never clears it** — 0.124 at best, and when the two tests have split, the
+conservative one has been right every time, including on candidates whose
+holdouts looked better than this one's. And ZBCN is the least liquid
+instrument in the set, so a modelled 10 bps round-turn is least believable
+precisely where the edge appears. The honest summary is that the one result
+that will not die is also the one whose cost assumption cannot be trusted.
 
 ### The one result costs do not kill
 
