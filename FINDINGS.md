@@ -294,7 +294,7 @@ at 0.6, and ma_cross 4.90% to 0.31% — which is what noise looks like and not
 what a regime effect looks like; and d ≈ 0.15 means the winning and losing
 distributions overlap by about 94%.
 
-### Settled: the gate does not pay for itself
+### Settled: the gate helps only where it is shorting, and not enough
 
 `fitzz/gated_family.py` crosses all five families with the gate, sweeping the
 threshold over 0/0.2/0.3/0.4/0.5/0.6 instead of choosing it. The gate is
@@ -303,7 +303,7 @@ hypothesis the journal measured. **0.0 is in the grid**, so the ungated family
 competes inside the same correction and a gated winner has to beat the version
 of itself that never refused a trade. `--vol-gate` on the runner.
 
-#### What the gate costs, with the strategy held fixed
+#### Long-only: what the gate costs, with the strategy held fixed
 
 Run 2026-10-26, gated and ungated against the *same cached bars*. On ZBCN
 mean_revert -- the only reproducible result in this search -- the sweep
@@ -332,6 +332,43 @@ p-value movement is the multiple-comparisons correction and nothing else. A
 6x grid cost the best result in ~280 sweeps its cost robustness without
 changing a single trade. Any future idea that widens a grid should be read
 against this number before it is read against its own backtest.
+
+#### With shorts, the gate does help -- and it is still not enough
+
+Run 2026-10-26 on the same bars with `--shorts`. Here the sweep chose
+**`volgate=0.5`**, so for once the gate beat the ungated competitor inside its
+own grid, and it improved every column it touched:
+
+| bps | SPA ungated | SPA gated | holdout ungated | holdout gated |
+|---|---|---|---|---|
+| 10 | 0.140 | **0.088** | +0.000104 | **+0.000590** |
+| 25 | 0.174 | 0.109 | +0.000059 | +0.000541 |
+| 50 | 0.244 | 0.153 | -0.000017 | +0.000459 |
+| 100 | 0.381 | 0.320 | -0.000134 | +0.000296 |
+
+Lower p at all four cost levels, in-sample +0.000435 -> +0.000592, and a
+holdout 5.7x better that stays positive at 100 bps where the ungated version
+has gone negative. **So "the gate never helps" is wrong** -- an earlier draft
+of this section said so, and the long-only runs are the reason. It does not
+help long. It helps short.
+
+A mechanism fits ZBCN in particular. It fell over this window by chopping
+rather than trending, which is why shorting it was so punishing in the first
+place; shorting a mean reversion into a dead-volatility regime has no
+snap-back to collect, so refusing those entries removes a subset of trades
+that is genuinely bad rather than merely unlucky.
+
+And it is still nothing. Full-window SPA was 0.011; with a third reserved it
+is **0.088**, and RC is **0.419**. By this document's own rule a holdout is
+only readable after a low p-value, and 0.088 is not one. The gate turns a
+non-result into a better-looking non-result.
+
+Worth recording what makes it the most seductive row here: in-sample
++0.000592 against a holdout of +0.000590 is **99.7% retention**, the best in
+the entire search, decaying gracefully to +0.000296 at 100 bps. That is the
+profile a real edge has. It is also what p = 0.088 means when the winner was
+picked from ~594 configs, which is exactly why the gate sequence exists and
+why the holdout is read last.
 
 #### The earlier runs said the same thing less cleanly
 
@@ -502,10 +539,21 @@ Four independent runs of 35 fits each, four different modes — 0.2, 0.0, 0.5,
 pointed at, is a mode in none of them. 140 fits chose a threshold and no two
 runs agreed on what it should be.
 
-That is the final word on the gate, and it is a better one than any p-value:
-the parameter has no stable optimum, so there is nothing there to optimise.
-The journal found a real in-sample pattern, the sweep priced it, and the
-price was higher than the pattern was worth.
+That is the strongest single argument against the gate, and a better one than
+any p-value: across 140 fits the parameter has no stable optimum, so there is
+mostly nothing there to optimise.
+
+**Mostly** is the honest word, and it is a narrowing of what an earlier draft
+claimed. The shorts case above is a real exception -- there the gate was
+chosen over no-gate, lowered p at every cost level and improved the holdout
+5.7x. The scatter says the threshold is noise *on average across 140 fits*,
+not that it is noise everywhere. Where the gate does bite, it still produced
+p = 0.088 and RC = 0.419, so the conclusion is unchanged even where the
+reasoning for it is.
+
+The journal found a real in-sample pattern, the sweep priced it, and in the
+one configuration where the pattern survived pricing it was still not worth
+enough to clear.
 
 ## Data bugs found along the way
 
