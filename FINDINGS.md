@@ -211,9 +211,22 @@ neutral: 34 of 35 pairs lose significance by 10 bps with shorts on, against
 29 of 30 long-only, and the one long-only result that survived cost does not
 survive the addition.
 
-**SPA and Reality Check disagreed on every candidate.** SPA 0.021 against RC
-0.113; SPA 0.035 against RC 0.154; SPA 0.037 against RC 0.099. When they
-split, the conservative one was right every time.
+**SPA and Reality Check usually disagreed, and agreement means nothing
+either.** SPA 0.021 against RC 0.113; SPA 0.035 against RC 0.154; SPA 0.037
+against RC 0.099. When they split, the conservative one was right every time.
+
+Read that as a fact about RC being stricter, not as a reason to trust
+agreement. On 2026-10-27, QNT mean_revert 1h short cleared **both** -- SPA
+0.009 and RC 0.047 at 10 bps -- and its holdout was **-0.000673**, negative
+at every cost level and three times the in-sample edge with the sign
+reversed. Both tests agreed and both were wrong.
+
+They were always going to be. SPA and Reality Check are two corrections of
+the *same in-sample quantity* for the *same* grid search; neither can see
+data that was never searched. They are not two opinions, and two of them
+agreeing is one piece of evidence, not two. Only the holdout is looking
+somewhere else, which is why it stays in the sequence after them rather than
+being replaced by them.
 
 ## What the losing trades have in common
 
@@ -501,6 +514,32 @@ it.
 Note the shorter calendar window: 5,000 bars at 1h is about 208 days against
 833 at 4h, so this is one regime rather than several, which is its own reason
 for caution regardless of the p-value.
+
+### Gated, 1h, with shorts, on fresh bars
+
+Re-run 2026-10-27 on newly fetched 1h bars, with an ungated-shorts control on
+the same bars. Lowest p(SPA) 0.025 (ZBCN, RC 0.054), 2 of 35 under 5%.
+
+The gate split by symbol, which neither earlier run showed so plainly:
+
+* **ZBCN chose `volgate=0.2`** -- a light gate that barely changes the returns
+  (+0.000274 gated against +0.000271 ungated) yet improves the p-value at
+  every cost level, most at the costs that matter: 0.085 → 0.072 at 10 bps,
+  0.221 → 0.108 at 25, 0.418 → 0.234 at 50. Still gone by 10 bps on the 5%
+  line.
+* **QNT chose `volgate=0`**, and the search-cost penalty reappears exactly as
+  in the long-only case: identical returns, SPA 0.009 → 0.024 from the 6x
+  grid alone.
+
+So across five gated runs the gate is chosen roughly half the time, helps
+slightly when chosen, and costs a factor of 2-3 in p-value when it is not.
+Neither outcome has produced a tradable result.
+
+QNT's row in that control is the one worth keeping, and it is written up
+under *Things worth remembering*: ungated it cleared **both** tests at 10 bps
+-- SPA 0.009, RC 0.047 -- with a holdout of **-0.000673**. It is the second
+time RC has gone below 5% in ~350 sweeps, and the only time both tests have
+cleared together. They were both wrong.
 
 ### Gated, 1h, with shorts — and the scatter completed
 
