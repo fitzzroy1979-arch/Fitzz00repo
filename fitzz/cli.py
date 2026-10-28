@@ -14,7 +14,7 @@ The first argument selects the tool; everything after it is forwarded verbatim
 to that tool's own argument parser, so every existing flag keeps working, e.g.:
 
     fitzz trade --simulate --watchlist --days 7 --interval 1h
-    fitzz sweep prices.csv --family ma_cross --objective sharpe
+    fitzz sweep --csv prices.csv --family ma_cross --objective return
     fitzz feed --symbols BTC,ETH
     fitzz flows --cot BITCOIN
 """
