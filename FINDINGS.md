@@ -600,6 +600,9 @@ The two feeds in `fitzz flows` were the last untested direction — the one
 place to look that is not a function of price and volume. Both were tested
 the same way, against BTC weekly returns, and both came back empty.
 
+Every number below comes from `studies/cot_signal.py` and
+`studies/sec_signal.py`, which are committed with the EDGAR counts they used.
+
 ### CFTC positioning describes the week that just happened
 
 CME Bitcoin legacy futures-only, 446 weekly reports, 2018-04-10 to
