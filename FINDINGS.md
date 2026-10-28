@@ -594,9 +594,98 @@ The journal found a real in-sample pattern, the sweep priced it, and in the
 one configuration where the pattern survived pricing it was still not worth
 enough to clear.
 
+## Settled: neither flow predicts anything
+
+The two feeds in `fitzz flows` were the last untested direction — the one
+place to look that is not a function of price and volume. Both were tested
+the same way, against BTC weekly returns, and both came back empty.
+
+### CFTC positioning describes the week that just happened
+
+CME Bitcoin legacy futures-only, 446 weekly reports, 2018-04-10 to
+2026-10-20, 444 aligned observations. Positions are as of Tuesday and
+published the Friday after, so everything is measured **from the release
+close forward**; aligning on the as-of date instead would be reading
+Tuesday's positions at Tuesday's price, which no trader could do.
+
+| feature | vs next week | t | vs week just past | t |
+|---|---|---|---|---|
+| commercial net change (w/w) | +0.013 | +0.275 | **+0.132** | **+2.792** |
+| commercial net level | +0.036 | +0.763 | +0.086 | +1.818 |
+| commercial net / open interest | +0.046 | +0.964 | **+0.104** | **+2.209** |
+| non-commercial net level | −0.085 | −1.791 | **−0.153** | **−3.264** |
+
+Every forward reading is inside noise; three of the four backward readings
+are not. The feed carries real information about the week that has already
+happened and none about the week ahead. The largest forward number
+(speculator net, t = −1.791, p ≈ 0.07) is one of four features tested, which
+is where one such reading is expected.
+
+The quintile table says the same thing by not ordering. The best next-week
+mean sits in the **fourth** bucket, not an extreme:
+
+| commercial net change | n | mean next week | up |
+|---|---|---|---|
+| −1943 .. −236 | 88 | +0.88% | 46.6% |
+| −232 .. −8 | 89 | +0.32% | 51.7% |
+| −8 .. +2 | 89 | −0.16% | 51.7% |
+| +3 .. +201 | 89 | **+2.81%** | 61.8% |
+| +212 .. +1917 | 89 | +0.59% | 51.7% |
+
+This replaces the earlier −0.009 / +0.205 figures, which came from a smaller
+sample. Same conclusion, properly sized.
+
+### SEC filing counts describe nothing at all
+
+Weekly EDGAR full-text hit counts for three queries, 2018–2026, against the
+same weekly returns. Filings dated Mon..Sun are all public by Sunday, so the
+feature is known at the last close ≤ Sunday and the forward return runs from
+there. **Twelve looks were declared before the run** — 3 queries × 2 feature
+forms × 2 directions — of which the 6 forward ones are the hypothesis and the
+6 backward ones a control. Chance expectation at 0.05 is 0.3 forward hits;
+with n ≈ 450 an |r| below about 0.094 cannot clear 2 sigma at all.
+
+| query | feature | vs next week | t | vs week just past | t |
+|---|---|---|---|---|---|
+| `bitcoin` | count change (log w/w) | +0.008 | +0.181 | −0.006 | −0.119 |
+| `bitcoin` | count z-score (26w) | +0.034 | +0.721 | +0.023 | +0.493 |
+| `"bitcoin treasury"` | count change (log w/w) | +0.039 | +0.782 | −0.048 | −0.970 |
+| `"bitcoin treasury"` | count z-score (26w) | +0.014 | +0.249 | −0.034 | −0.628 |
+| `cryptocurrency` | count change (log w/w) | −0.008 | −0.173 | +0.042 | +0.901 |
+| `cryptocurrency` | count z-score (26w) | +0.013 | +0.281 | +0.030 | +0.623 |
+
+Nothing reaches |t| = 1.5 in either direction. 1,377 weekly requests, zero
+fetch failures.
+
+This is a **stronger null than the CFTC result**, and the difference is the
+interesting part. Positioning at least described the week just past; filing
+counts do not even do that. Counting how often a word appears in EDGAR
+measures filing season and disclosure fashion, not the market.
+
+Three things kept the test honest, each of which would have manufactured a
+result on its own:
+
+* **The feature is a change or a z-score, never the raw count.** Crypto
+  mentions grew from 6 a week to 1,344 while the price also rose; correlating
+  two rising series measures the trend. The raw level is in the output,
+  flagged, and not counted among the twelve looks — it reads −0.041 to −0.057
+  forward, which is the trend, not a signal.
+* **Counts come from EDGAR's `total` for a one-week window, one request per
+  week.** Paging the filings and bucketing them locally would be far fewer
+  requests and would not work: the endpoint refuses offsets past ~10,000, so
+  a locally-bucketed eight-year series would silently be a truncated one.
+  That is the bug in the entry below, and designing around it is the only
+  reason this series is trustworthy.
+* **A phrase is zero before it is coined.** `"bitcoin treasury"` is unused
+  until 2019-01-28; 56 leading weeks were dropped rather than fed to a
+  log-change over a run of zeros. Even so its median weekly count is 0, so
+  its three middle quintiles are all exactly zero and its quintile table
+  carries no information — the correlations above are computed over the real
+  spread, but that query's bucket view should be ignored.
+
 ## Data bugs found along the way
 
-Seven, all the same shape: a read that was short, stale or simply another
+Eight, all the same shape: a read that was short, stale or simply another
 symbol's, passing as valid. Each silently changed results rather than
 erroring.
 
@@ -619,6 +708,17 @@ erroring.
    payoff figure from a shorts run before 2026-10-22 describes half the
    trades. It now shares `fitzz.journal`'s extractor with the journal, so the
    two cannot disagree about what a trade is.
+8. `fetch_sec_filings` read one EDGAR response and its own docstring asserted
+   that response was the complete result set, which made sorting by date
+   safe. EDGAR returns 100 hits ranked by *relevance*, so `--sort date
+   --limit 20` gave "the 20 newest of the 100 most relevant" while reading
+   exactly like "the 20 newest". On `bitcoin treasury` since January it
+   called 2026-10-19 the newest filing; paging finds 2026-10-23 and
+   2026-10-21 ahead of it. It hid the newest filings behind the word
+   "newest". It now pages with `from` until it has every match or
+   `--max-rows`, and returns `complete` so a caller can tell a full ordering
+   from a partial one. The commit message for 2d7d67d calls this the seventh
+   bug of this shape; counting this list, it is the eighth.
 
 Guards now check the data rather than the chart's description of itself: bar
 count against confirmed depth, price against a live quote, bar spacing
@@ -626,9 +726,25 @@ against the requested interval, and a lock against concurrent readers.
 
 ## What would actually change the answer
 
-Not more sweeps on this data — it is measured out. Either a different market
-(everything here is crypto through one 2024–2026 regime), or a signal that is
-not a function of price and volume. The CFTC and SEC feeds in `fitzz flows`
-are the untested direction, though commercial positioning already measured as
-lagging price (-0.009 correlation with next-week returns, +0.205 with the
-week just past).
+Not more sweeps on this data — it is measured out. And not the flows either:
+both are now tested and neither predicts next week, so the "signal that is not
+a function of price and volume" direction has been tried and closed with the
+rest.
+
+What is left is genuinely outside what this repo can reach:
+
+* **A different market.** Everything here is crypto through one 2024–2026
+  regime, eleven symbols that largely move together. Equities, rates or
+  commodities over several decades would be a new test rather than another
+  look at the same data.
+* **A faster clock.** Every edge found here died at 10 bps of cost. Intraday
+  or microstructure work is where costs can be cleared, and it needs
+  execution data this project does not have.
+* **A non-count use of the filings.** Counting how often a word appears was
+  the cheap test and it failed. Reading *what the filings say* — a specific
+  disclosure by a specific filer — is a different question, and one that
+  eight years of weekly hit totals cannot answer either way.
+
+None of these is a refinement of the current search; each is a new project.
+The honest summary of this one is that it measured its space and found
+nothing tradable in it.
