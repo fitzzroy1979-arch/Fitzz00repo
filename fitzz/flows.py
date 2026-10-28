@@ -36,6 +36,7 @@ SEC_USER_AGENT does.
 import argparse
 import json
 import sys
+import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -163,17 +164,29 @@ def cot_net_changes(rows):
 # SEC
 # --------------------------------------------------------------------------- #
 
+SEC_PAGE_SIZE = 100          # EDGAR's per-response cap, not a choice
+SEC_MAX_FROM = 9900          # the endpoint refuses offsets past ~10k
+
+
 def fetch_sec_filings(query, forms=None, since=None, until=None, limit=20,
-                      sort="date"):
+                      sort="date", max_rows=1000):
     """
     EDGAR full-text search. `query` is matched against filing text; wrap it in
     double quotes for a phrase.
 
-    EDGAR returns hits ranked by relevance and ignores every sort parameter it
-    is offered, so ordering is done here. That is safe rather than misleading
-    because the endpoint returns the whole result set in one response: sorting
-    sees every match, not just the first relevance page. Sorting happens before
-    `limit` is applied, so --limit really does give the newest N.
+    EDGAR ranks by relevance and ignores every sort parameter it is offered,
+    so ordering is done here -- which is only honest if the sort can see every
+    match. **It returns 100 hits per response, not the whole result set**, so
+    this pages with `from` until it has `total` rows or `max_rows`, whichever
+    comes first, and sorts after.
+
+    An earlier version of this function read one response and claimed in its
+    own docstring that the response was complete. It was not: a query matching
+    10,000 filings returned the 100 most *relevant*, and `--limit 20 --sort
+    date` then gave "the 20 newest of those 100", which reads exactly like
+    "the 20 newest" and is not. `complete` in the result says whether the sort
+    saw everything; callers that care about recency should check it rather
+    than trust the ordering.
     """
     params = {"q": query}
     if forms:
@@ -184,27 +197,40 @@ def fetch_sec_filings(query, forms=None, since=None, until=None, limit=20,
         params["dateRange"] = "custom"
         params["startdt"] = since or "2001-01-01"
         params["enddt"] = until or datetime.utcnow().strftime("%Y-%m-%d")
-    data = _get_json(SEC_FULLTEXT, params, headers={
-        "User-Agent": SEC_USER_AGENT, "Accept": "application/json",
-    })
-    hits = (data.get("hits") or {}).get("hits") or []
-    total = ((data.get("hits") or {}).get("total") or {}).get("value", 0)
-    out = []
-    for h in hits:
-        s = h.get("_source") or {}
-        names = s.get("display_names") or []
-        # file_type is the exhibit (EX-99.1); root_form is the filing (8-K).
-        out.append({
-            "company": names[0] if names else "",
-            "form": s.get("root_form") or s.get("form") or s.get("file_type") or "",
-            "exhibit": s.get("file_type") or "",
-            "filed": s.get("file_date") or s.get("period_ending") or "",
-            "cik": (s.get("ciks") or [""])[0],
-            "doc": h.get("_id", ""),
+
+    out, total, fetched = [], 0, 0
+    while True:
+        page = dict(params)
+        if fetched:
+            page["from"] = fetched
+        data = _get_json(SEC_FULLTEXT, page, headers={
+            "User-Agent": SEC_USER_AGENT, "Accept": "application/json",
         })
+        hits = (data.get("hits") or {}).get("hits") or []
+        total = ((data.get("hits") or {}).get("total") or {}).get("value", total)
+        for h in hits:
+            src = h.get("_source") or {}
+            names = src.get("display_names") or []
+            # file_type is the exhibit (EX-99.1); root_form is the filing (8-K).
+            out.append({
+                "company": names[0] if names else "",
+                "form": src.get("root_form") or src.get("form")
+                        or src.get("file_type") or "",
+                "exhibit": src.get("file_type") or "",
+                "filed": src.get("file_date") or src.get("period_ending") or "",
+                "cik": (src.get("ciks") or [""])[0],
+                "doc": h.get("_id", ""),
+            })
+        fetched += len(hits)
+        if (len(hits) < SEC_PAGE_SIZE or fetched >= total
+                or fetched >= max_rows or fetched >= SEC_MAX_FROM):
+            break
+        time.sleep(0.12)         # EDGAR asks for <10 requests/second
+
     if sort == "date":
         out.sort(key=lambda f: f["filed"] or "", reverse=True)
-    return {"total": total, "filings": out[:limit], "returned": len(hits)}
+    return {"total": total, "filings": out[:limit], "returned": fetched,
+            "complete": fetched >= total}
 
 
 
@@ -433,6 +459,13 @@ def _print_cot(rows, market, limit=12):
 
 def _print_sec(res, query):
     print(f"\nSEC EDGAR full-text — {query!r}: {res['total']} filing(s) matched")
+    if not res.get("complete", True):
+        # Without this the date ordering below looks authoritative and is not:
+        # it ranks only the relevance-ranked slice that was actually fetched.
+        print(f"  note: read {res['returned']} of {res['total']} matches. "
+              f"EDGAR ranks by relevance, so these are the newest of that\n"
+              f"  slice, not the newest overall. Narrow the query or the date "
+              f"range, or raise max_rows.")
     if not res["filings"]:
         print("  (nothing returned)")
         return
@@ -470,6 +503,10 @@ def build_parser():
                         "EDGAR's relevance ranking.")
     p.add_argument("--exact", action="store_true",
                    help="Match --cot MARKET exactly instead of as a substring.")
+    p.add_argument("--max-rows", type=int, default=1000,
+                   help="Max SEC matches to page through before sorting "
+                        "(default 1000). Raise it when a broad query reports "
+                        "the result is incomplete.")
     p.add_argument("--limit", type=int, default=20,
                    help="Max rows to show (default 20).")
     p.add_argument("--json", action="store_true", help="Emit raw JSON.")
@@ -524,7 +561,7 @@ def main(argv=None):
         if args.sec:
             res = fetch_sec_filings(args.sec, forms=args.forms,
                                     since=args.since, limit=args.limit,
-                                    sort=args.sort)
+                                    sort=args.sort, max_rows=args.max_rows)
             payload["sec"] = res
             if not args.json:
                 _print_sec(res, args.sec)
