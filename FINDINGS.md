@@ -3,16 +3,19 @@
 What was tested, what was found, and what to not repeat. First written
 2026-10-17; p-values re-measured on freshly fetched bars on 2026-10-20 and
 again on 2026-10-26, so three independent pulls now stand behind the
-candidate table.
+candidate table. The volatility gate was swept and closed on 2026-10-22, and
+the CFTC and SEC feeds were tested on 2026-10-28. The search is finished.
 
 ## The result
 
-Nothing tested here has a detectable edge on these symbols.
+Nothing tested here has a detectable edge on these symbols, and neither of
+the two non-price data feeds predicts returns either.
 
 Five strategy families, long and short, eleven symbols, three timeframes,
-four cost levels — roughly 140 significance sweeps over ~20,000 parameter
-configurations each. Five results ever cleared p ≤ 0.05, and none of them
-survived a second look:
+four cost levels, plus a swept volatility-regime entry gate in all four
+timeframe/direction corners — roughly 385 symbol/family significance sweeps
+over ~20,000 parameter configurations each. Five results ever cleared
+p ≤ 0.05, and none of them survived a second look:
 
 | candidate | 10-17 | 10-20 | 10-26 | status |
 |---|---|---|---|---|
@@ -22,10 +25,17 @@ survived a second look:
 | CC mean_revert, 4h short | 0.038 | 0.024 | **0.473** | holdout -0.000884; gone by 50 bps |
 | ZBCN mean_revert, 1h short | 0.037 | not re-run | 0.018 gated | costs: gone by 25 bps |
 
-Chance alone puts 5% of sweeps under p = 0.05 — about 7 of the ~140 run
-here. Five hits is *below* what noise predicts, not above it. Finding a
+Chance alone puts 5% of sweeps under p = 0.05 — about 19 of the ~385 run
+here. Five hits is *well below* what noise predicts, not above it. Finding a
 handful of sub-5% results in a search this wide is the expected outcome of
 searching, and the only honest reading of the table.
+
+(That total is a running count accumulated across dated runs. Earlier drafts
+of this document quote it as 140, 245, 280 and 350 in different sections,
+each correct when written and none updated afterwards — the same trap as
+every bug in the log below, in prose rather than in code. The whole-search
+figures are now reconciled to ~385; the per-run counts, 30 and 35 pairs, are
+exact.)
 
 ### The p-values are not stable
 
@@ -67,7 +77,7 @@ them.
 
 That is a real distinction and it should not be rounded down. Three
 independent pulls, four cost levels, positive holdouts throughout, p(SPA)
-never above 0.023. Nothing else in ~245 sweeps has that profile.
+never above 0.023. Nothing else in ~385 sweeps has that profile.
 
 It is still not tradable, on the same two grounds as ever. **Reality Check
 never clears it** — 0.124 at best, and when the two tests have split, the
@@ -166,6 +176,12 @@ five, which is the point of having it.
 
 Symbols: BTC, XRP, FLR, ZBCN, CC (Canton), HBAR, QNT, plus SOL, ADA, LINK,
 DOT as out-of-sample. Timeframes: 1d, 4h, 1h. Costs: 10, 25, 50, 100 bps.
+
+Two non-price data sources were tested the same way, against BTC weekly
+returns rather than as strategy families: CFTC Commitments of Traders
+positioning (444 aligned weeks) and SEC EDGAR filing counts (1,377 weekly
+queries). Both are written up under *Settled: neither flow predicts
+anything*; neither predicts next week.
 
 QNT is worth keeping in the set as a counterexample: over eight years it rose
 155% while sma_cross finished at -1.97% with a 79% drawdown. Every other
@@ -279,7 +295,7 @@ differ in both the feature and the outcome will separate them every time, and
 it survives a holdout, because composition is stable across time. The holdout
 does not catch this one. Only the control does.
 
-### The one thing left
+### The lead the journal produced (settled below)
 
 Bandwidth percentile at entry — the volatility regime — is the only feature
 that keeps its sign and rough size in all three views: pooled (+0.188/+0.104),
@@ -299,8 +315,9 @@ return in four of five families, in-sample **and** out:
 | breakout | +2.83% | +4.47% |
 | mean_revert | +0.93% | +0.78% |
 
-First thing all session to improve out of sample. Three reasons it is not yet
-a result: total return falls at every threshold, because the filter removes
+First thing all session to improve out of sample, and the lead that the
+swept gate in the next section was built to price. Three reasons it was not
+a result on its own: total return falls at every threshold, because the filter removes
 more good trades than bad; the effect is **non-monotone** out of sample —
 breakout's holdout mean goes 4.47% at 0.4 to 0.08% at 0.5 and back to 0.61%
 at 0.6, and ma_cross 4.90% to 0.31% — which is what noise looks like and not
@@ -342,7 +359,7 @@ sweeps 2 → 1, QNT mean_revert 0.019 → 0.060.
 is entangled with whatever the search found, and the two cannot be separated.
 Here the search found nothing -- it rejected the gate outright -- so the entire
 p-value movement is the multiple-comparisons correction and nothing else. A
-6x grid cost the best result in ~280 sweeps its cost robustness without
+6x grid cost the best result in ~385 sweeps its cost robustness without
 changing a single trade. Any future idea that widens a grid should be read
 against this number before it is read against its own backtest.
 
@@ -538,7 +555,7 @@ Neither outcome has produced a tradable result.
 QNT's row in that control is the one worth keeping, and it is written up
 under *Things worth remembering*: ungated it cleared **both** tests at 10 bps
 -- SPA 0.009, RC 0.047 -- with a holdout of **-0.000673**. It is the second
-time RC has gone below 5% in ~350 sweeps, and the only time both tests have
+time RC has gone below 5% in ~385 sweeps, and the only time both tests have
 cleared together. They were both wrong.
 
 ### Gated, 1h, with shorts — and the scatter completed
