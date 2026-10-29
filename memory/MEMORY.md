@@ -1,0 +1,11 @@
+- [Node/nvm setup](node-nvm-setup.md) — node is under nvm, source it before node/npm commands
+- [TradingView MCP install](tradingview-mcp-install.md) — bridge working; launch TradingView w/ --remote-debugging-port=9222, run 00fitzz.py w/ python3, warm up before reading
+- [No Homebrew on this Mac](no-homebrew-local-bin.md) — install CLIs as binaries into ~/.local/bin, brew is unavailable
+- [fitzz API keys are placeholders](fitzz-api-keys-placeholder.md) — --learn/--research blocked; .zshrc keys are PASTE_ stubs & not sourced non-interactively
+- [Backtest evidence order](backtest-evidence-order.md) — cost scan first, then SPA *and* RC, then holdout; a headline return is not evidence
+- [What flatters a backtest](backtest-signal-design.md) — redundant signals, win rate, more confluence conditions and shorts all mean nothing
+- [TradingView bridge data integrity](tv-bridge-data-integrity.md) — reads lie silently; verify bars against price, spacing and depth, never the chart's self-description
+- [fitzz strategy search is measured out](fitzz-strategy-search-result.md) — ~385 sweeps incl. a swept vol gate; only ZBCN mean_revert reproduces, RC never clears it; CFTC/SEC flows now tested and null too; see FINDINGS.md
+- [Keep commits out of long-running turns](claude-commits-separate-from-long-runs.md) — an interrupt makes the git state unclear and I reported it wrong once
+- [Pooled comparisons hide composition](pooled-comparison-composition.md) — a holdout does NOT catch it; drop the dominant group and standardise within group
+- [Local workspace](local-workspace.md) — account specifics; untracked, stays off the public repo

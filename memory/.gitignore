@@ -1,0 +1,4 @@
+# Machine- and account-specific memories. The rest of this directory is
+# tracked and pushed to a public repo; anything matching these stays local.
+local-*.md
+private-*.md

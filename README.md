@@ -37,6 +37,7 @@ section is the most reusable thing here.
 │   └── gated_family.py    #   volatility-regime entry gate
 ├── run_sweep_4h.py        # the research driver — every family x symbol, side by side
 ├── studies/               # one-off analyses backing specific FINDINGS claims
+├── memory/                # Claude Code's project memory (symlinked from ~/.claude)
 ├── FINDINGS.md            # results, methodology, and the bug log
 ├── 00fitzz.py             # back-compat shim → fitzz.trading
 ├── sweep_significance.py  # back-compat shim → fitzz.sweep
