@@ -11,7 +11,7 @@ A combined toolkit for TradingView-data-backed quant work. Four tools, one CLI.
 
 ## What this repo concluded
 
-**No tradable edge was found.** `FINDINGS.md` is the write-up: roughly 385
+**No tradable edge was found.** `FINDINGS.md` is the write-up: roughly 420
 symbol/family significance sweeps over five strategy families, eleven
 symbols and three timeframes, plus a swept volatility gate and both
 public-data feeds, all corrected for the search that found them. Read it before running a sweep and reading a low p-value as news.

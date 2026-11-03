@@ -5,11 +5,11 @@ metadata:
   type: project
 ---
 
-As of 2026-10-28, the fitzz strategy search at `~/Desktop/AI` has run ~385 symbol/family significance sweeps: five families (`sma_cross`, `follow_money`, `breakout`, `mean_revert`, `confluence`), long and short, eleven symbols, timeframes 1d/4h/1h, costs 10/25/50/100 bps, plus a swept volatility-regime entry gate in all four timeframe/direction corners. **Result: no detectable edge anywhere.**
+As of 2026-11-03, the fitzz strategy search at `~/Desktop/AI` has run ~420 symbol/family significance sweeps: five families (`sma_cross`, `follow_money`, `breakout`, `mean_revert`, `confluence`), long and short, eleven symbols, timeframes 1d/4h/1h, costs 10/25/50/100 bps, plus a swept volatility-regime entry gate in all four timeframe/direction corners. **Result: no detectable edge anywhere.**
 
 Watchlist / main focus: BTC, XRP, FLR, ZBCN, CC (Canton Network), HBAR, QNT. Out-of-sample set: SOL, ADA, LINK, DOT. Account specifics are in [[local-workspace]], which is not tracked.
 
-**ZBCN mean_revert 4h long is the one reproducible result** — SPA 0.021 / 0.018 / 0.016 across three independent data pulls (10-17, 10-20, 10-26), and on the third it survived the cost scan at all four levels with a positive holdout at each, p(SPA) never above 0.023. Nothing else has that profile. It is still not tradable: Reality Check never clears it (0.124 at best, and when the two tests split RC has been right every time), and ZBCN is the least liquid instrument in the set, so the modelled 10 bps round-turn is least believable exactly where the edge appears. Do not round this down to "nothing worked", and do not promote it either.
+**ZBCN mean_revert 4h long is the one reproducible result** — SPA 0.021 / 0.018 / 0.016 / 0.008 across four independent data pulls (10-17, 10-20, 10-26, 11-03), and on the third and fourth it survived the cost scan at all four levels with a positive holdout at each, p(SPA) never above 0.023. Four reproductions are four measurements of the same window, grid and instrument, not four independent confirmations. Nothing else has that profile. It is still not tradable: Reality Check never clears it (0.124 at best, and when the two tests split RC has been right every time), and ZBCN is the least liquid instrument in the set, so the modelled 10 bps round-turn is least believable exactly where the edge appears. Do not round this down to "nothing worked", and do not promote it either.
 
 Everything else died, and four of five candidates are unreadable across pulls — QNT 0.031 → 0.046 → 0.019, CC 0.024 → 0.473 (significant to nothing on 2% more data). The volatility gate the trade journal pointed at was swept properly and closed in all four corners; see FINDINGS.md.
 

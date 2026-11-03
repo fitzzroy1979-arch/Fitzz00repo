@@ -2,8 +2,8 @@
 
 What was tested, what was found, and what to not repeat. First written
 2026-10-17; p-values re-measured on freshly fetched bars on 2026-10-20 and
-again on 2026-10-26, so three independent pulls now stand behind the
-candidate table. The volatility gate was swept and closed on 2026-10-22, and
+again on 2026-10-26 and 2026-11-03, so four independent pulls now stand
+behind the candidate table. The volatility gate was swept and closed on 2026-10-22, and
 the CFTC and SEC feeds were tested on 2026-10-28. The search is finished.
 
 ## The result
@@ -17,15 +17,15 @@ timeframe/direction corners — roughly 385 symbol/family significance sweeps
 over ~20,000 parameter configurations each. Five results ever cleared
 p ≤ 0.05, and none of them survived a second look:
 
-| candidate | 10-17 | 10-20 | 10-26 | status |
-|---|---|---|---|---|
-| ZBCN mean_revert, 4h long | 0.021 | 0.018 | **0.016** | the one survivor; RC never clears (0.124 at best) |
-| QNT mean_revert, 4h long | 0.031 | 0.046 | **0.019** | 0.103 once a third is held out; RC never clears |
-| FLR confluence, 4h short | 0.033 | 0.030 | not re-run | RC 0.154; holdout 82% decayed; absent on unseen symbols |
-| CC mean_revert, 4h short | 0.038 | 0.024 | **0.473** | holdout -0.000884; gone by 50 bps |
-| ZBCN mean_revert, 1h short | 0.037 | not re-run | 0.018 gated | costs: gone by 25 bps |
+| candidate | 10-17 | 10-20 | 10-26 | 11-03 | status |
+|---|---|---|---|---|---|
+| ZBCN mean_revert, 4h long | 0.021 | 0.018 | 0.016 | **0.008** | the one survivor; RC never clears (0.113 at best) |
+| QNT mean_revert, 4h long | 0.031 | 0.046 | 0.019 | **0.022** | RC 0.100; 0.103 once a third is held out |
+| FLR confluence, 4h short | 0.033 | 0.030 | not re-run | 0.586 long | RC 0.154; holdout 82% decayed; absent on unseen symbols |
+| CC mean_revert, 4h short | 0.038 | 0.024 | **0.473** | excluded | holdout -0.000884; gone by 50 bps; see bug 10 |
+| ZBCN mean_revert, 1h short | 0.037 | not re-run | 0.018 gated | not re-run | costs: gone by 25 bps |
 
-Chance alone puts 5% of sweeps under p = 0.05 — about 19 of the ~385 run
+Chance alone puts 5% of sweeps under p = 0.05 — about 21 of the ~420 run
 here. Five hits is *well below* what noise predicts, not above it. Finding a
 handful of sub-5% results in a search this wide is the expected outcome of
 searching, and the only honest reading of the table.
@@ -34,8 +34,10 @@ searching, and the only honest reading of the table.
 of this document quote it as 140, 245, 280 and 350 in different sections,
 each correct when written and none updated afterwards — the same trap as
 every bug in the log below, in prose rather than in code. The whole-search
-figures are now reconciled to ~385; the per-run counts, 30 and 35 pairs, are
-exact.)
+figures are reconciled here, and this is now the **only** place in the
+document that states the total — the other sections say "the whole search"
+and point here, so the four-way drift cannot recur. The per-run counts, 30
+and 35 pairs, are exact.)
 
 ### The p-values are not stable
 
@@ -57,7 +59,7 @@ single number in this document should be read as "about this, on that pull",
 and a candidate that only ever sits near 0.05 is indistinguishable from one
 sitting at 0.5.
 
-### Three pulls in, only one candidate is reproducible
+### Four pulls in, only one candidate is reproducible
 
 Of the five that ever cleared 5%, four move far enough between pulls to be
 unreadable. ZBCN mean_revert at 4h long is the exception, and on 2026-10-26
@@ -77,7 +79,7 @@ them.
 
 That is a real distinction and it should not be rounded down. Three
 independent pulls, four cost levels, positive holdouts throughout, p(SPA)
-never above 0.023. Nothing else in ~385 sweeps has that profile.
+never above 0.023. Nothing else in the whole search has that profile.
 
 It is still not tradable, on the same two grounds as ever. **Reality Check
 never clears it** — 0.124 at best, and when the two tests have split, the
@@ -359,7 +361,7 @@ sweeps 2 → 1, QNT mean_revert 0.019 → 0.060.
 is entangled with whatever the search found, and the two cannot be separated.
 Here the search found nothing -- it rejected the gate outright -- so the entire
 p-value movement is the multiple-comparisons correction and nothing else. A
-6x grid cost the best result in ~385 sweeps its cost robustness without
+6x grid cost the best result in the whole search its cost robustness without
 changing a single trade. Any future idea that widens a grid should be read
 against this number before it is read against its own backtest.
 
@@ -555,7 +557,7 @@ Neither outcome has produced a tradable result.
 QNT's row in that control is the one worth keeping, and it is written up
 under *Things worth remembering*: ungated it cleared **both** tests at 10 bps
 -- SPA 0.009, RC 0.047 -- with a holdout of **-0.000673**. It is the second
-time RC has gone below 5% in ~385 sweeps, and the only time both tests have
+time RC has gone below 5% in the whole search, and the only time both tests have
 cleared together. They were both wrong.
 
 ### Gated, 1h, with shorts — and the scatter completed
@@ -752,9 +754,67 @@ Per-symbol trade counts were 0-9. That is far too few to sweep: it is the
 statistical-power problem recorded above, and the reason the real search
 runs at 4h where the same configs make 90-130 trades.
 
+## Fourth pull: the one result holds, and still fails the same gate
+
+Run 2026-11-03 on freshly fetched 4h bars, 35 pairs long-only at 10 bps,
+followed by a cost scan at 10/25/50/100.
+
+| | |
+|---|---|
+| sweeps | 35 |
+| significant at 5% | **2** |
+| expected by chance | ~1.8 |
+| lowest p(SPA) | 0.008, ZBCN mean_revert |
+
+Two hits against 1.8 expected is the null landing exactly where noise
+predicts. The second is QNT mean_revert (SPA 0.022, RC 0.100).
+
+**ZBCN mean_revert reproduced for a fourth time, at its strongest yet**, and
+survives every cost level with the holdout positive throughout:
+
+| bps | in-sample | holdout | p(SPA) | p(RC) |
+|---|---|---|---|---|
+| 10 | +0.000515 | +0.000210 | 0.009 | 0.113 |
+| 25 | +0.000501 | +0.000194 | 0.012 | 0.124 |
+| 50 | +0.000478 | +0.000166 | 0.014 | 0.146 |
+| 100 | +0.000432 | +0.000112 | 0.022 | 0.182 |
+
+Config `w=50 entry=-2.5 exit=0`, unchanged across all four levels. The SPA
+sequence across pulls is now 0.021 / 0.018 / 0.016 / **0.008** — it has not
+decayed on fresh data in three weeks of re-measurement, which four of the
+five original candidates did.
+
+**It is still not tradable, and the reason has not changed once.** Reality
+Check does not clear it at any cost level — 0.113 at best — and RC has been
+right every time the two tests split. ZBCN is also the least liquid
+instrument in the set, so the modelled 10 bps round turn is least believable
+exactly where the edge appears. Four reproductions of a result that fails
+the stricter test are four measurements of the same thing, not accumulating
+evidence: the pulls share a window, a grid and an instrument, so they are
+not independent in the way the count makes them sound.
+
+Of the 30 pairs the cost scan reached, **one survived every level** — the
+same ZBCN row. Chance expects about 1.5, so even the survivor count is at
+or below noise.
+
+Two process notes from this run, both of which caught something:
+
+* The **cost scan exited 2 (partial)**, naming the symbol it lost. The
+  exit-status fix from earlier the same day was written for the empty-run
+  case and caught a partial one on its first real use. Under the old code
+  the run would have returned 0 and the shrunken 30-pair denominator would
+  have passed as the full set — and the chance expectation printed alongside
+  it is computed from that denominator.
+* The run before this one produced nothing at all: the app quit between a
+  backtest and the sweep, every symbol failed, and the script reported
+  success. That is bug 9. This run was re-done after relaunching the bridge
+  with `open -a`, and the fetch path was smoke-tested first — 5,000 bars,
+  14400s spacing, last close matching a live quote — before an hour was
+  spent on it.
+
 ## Data bugs found along the way
 
-Nine, all the same shape: a read that was short, stale or simply another
+Ten, all the same shape: a read that was short, stale or simply another
 symbol's, passing as valid. Each silently changed results rather than
 erroring.
 
@@ -804,6 +864,26 @@ erroring.
    then exits leaves it liable to quit (the Electron log shows a relaunch
    followed by a quit). `open -a TradingView --args
    --remote-debugging-port=9222` hands it to launchd and it stays up.
+10. **The cross-symbol read, caught live on 2026-11-03.** During the cost
+    scan the re-read guard rejected `OKX:CCUSDT`: the re-read closed at
+    193.31 against a cached series closing at 0.0933. Checked directly
+    afterwards, the bridge returned **193.31 for `OKX:CCUSDT` and 193.31 for
+    `COINBASE:QNTUSD`** — the same number for two instruments whose prices
+    differ by a factor of 2,000. The chart was serving QNT's data under CC's
+    name, which is entries 3 and 4 happening again, two months after the
+    guards for them went in.
+
+    The guard worked: CC was excluded rather than written into the series,
+    and the run reported partial rather than success. This is the first
+    entry in this list caught *by the guards* rather than by noticing a
+    wrong number afterwards, which is the whole point of having them. The
+    cached CC series was genuine CC, so the sweep rows for it stand; only
+    the cost scan's re-read hit the fault.
+
+    **Unverified, and left that way honestly:** the daily backtest earlier
+    the same day also read CC through the bridge, on a code path with no
+    such guard. Its CC row (-39.86%) may be CC or may be another symbol.
+    Nothing checked it, so it is not evidence either way.
 
 Guards now check the data rather than the chart's description of itself: bar
 count against confirmed depth, price against a live quote, bar spacing
