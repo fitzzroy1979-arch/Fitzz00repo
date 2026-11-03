@@ -864,7 +864,7 @@ in isolation.
 
 ## Data bugs found along the way
 
-Eleven, all the same shape: a read that was short, stale or simply another
+Twelve, all the same shape: a read that was short, stale or simply another
 symbol's, passing as valid. Each silently changed results rather than
 erroring.
 
@@ -923,8 +923,8 @@ erroring.
     `BITSTAMP:BTCUSD`**, which trades near 76,500. The chart had frozen on
     QNT and was answering every request with it, whatever symbol was asked
     for. Requesting a third symbol did not unstick it and three consecutive
-    CC reads returned the same number; only restarting the app cleared it,
-    after which all symbols returned distinct correct prices.
+    CC reads returned the same number. It was recorded here that restarting
+    the app cleared it. **That was never true** -- see the correction below.
 
     It then recurred within the hour: on the gated sweep the CC re-read
     closed at **1.2477**, which is XRP's price. **The stuck symbol rotates**,
@@ -940,10 +940,45 @@ erroring.
     cached CC series was genuine CC, so the sweep rows for it stand; only
     the cost scan's re-read hit the fault.
 
-    **Unverified, and left that way honestly:** the daily backtest earlier
-    the same day also read CC through the bridge, on a code path with no
-    such guard. Its CC row (-39.86%) may be CC or may be another symbol.
-    Nothing checked it, so it is not evidence either way.
+    **Correction, 2026-11-03, later the same day.** Two things above are
+    wrong.
+
+    *The fault is larger than "wrong symbol".* A request for
+    `BITSTAMP:BTCUSD` at `1D` came back with 14,400s bars -- 4h -- closing
+    at 1.2477, which is XRP. Wrong instrument and wrong timeframe at once,
+    while `get_chart_state()` reported `BITSTAMP:BTCUSD` and `1D` perfectly
+    correctly. The chart's self-description is decoupled from its data on
+    every axis simultaneously, not just the symbol one.
+
+    *"Restarting cleared it" was never tested.* `open -a TradingView --args
+    --remote-debugging-port=9222` only passes `--args` when the app is not
+    already running; against a live instance macOS activates the existing
+    process and discards them, with no error and no restart. `ps -eo lstart`
+    showed the same pid throughout, 2h53m old, across three "restarts". The
+    freeze persisted that entire time and every read in between was served
+    the one frozen XRP 4h series. A genuine restart -- confirmed by a new
+    pid -- did clear it: all seven symbols then returned 86,400s spacing and
+    their own prices.
+
+    *The "655 bars" was not CC's depth.* It was the frozen XRP series being
+    measured. CC's real daily history is 265 bars, which agrees with its
+    1,584 cached 4h bars (264 days) from two independent reads.
+
+    *And the unguarded code path does not exist.* `cmd_backtest` fetches
+    through `bridge.load_bars`, the same function the sweep uses, so it
+    carries both `_bar_spacing_ok` and `_prices_agree`. The daily CC row
+    (-39.86%) was guarded after all, and the note here calling it unverified
+    was itself the unverified claim -- written from an assumption about the
+    code rather than from reading it.
+
+    **What the guards still cannot do.** They caught every bad read: a 1D
+    backtest over seven symbols refused all seven rather than returning a
+    plausible daily table computed on 4h XRP bars. But they are per-read.
+    Nothing notices that the chart has been stuck for three hours, and a run
+    that happens to hit only cached symbols sails through while the bridge
+    is dead. Diagnosing this needed prices carried in by hand from a source
+    the bridge could not touch, which is not something the toolkit does for
+    itself.
 
 11. **One row, two definitions of "trade".** Found 2026-11-03 while turning
     the sweep's returns into dollar P&L. The `trades` column came from
@@ -980,6 +1015,30 @@ erroring.
     one place that took the count from `describe()` and the win rate from
     `extract_trades()`. So every backtest figure in this document stands as
     printed, and only the sweep tables were mislabelled.
+
+12. **The backtest reports success when every symbol failed.** Found
+    2026-11-03, immediately after bug 9 was fixed in the sweep. A daily
+    backtest over seven symbols had all seven reads refused by the chart
+    lock, and `fitzz trade --backtest` exited **0** for all five strategies,
+    writing a JSON array of seven error objects. `cmd_backtest` returns its
+    results list rather than a status, so a run that fetched nothing is
+    indistinguishable from a run that worked, to anything reading the exit
+    code.
+
+    This is bug 9 exactly, in the sibling tool. That one was found, fixed
+    and written up in `run_sweep_4h.py` the same morning, and nothing
+    prompted a look at the other entry point with the same shape. The lesson
+    recorded for bug 9 was "test the call site, not the function"; the
+    lesson here is narrower and more annoying -- **when a defect is a
+    property of a pattern rather than of a line, fixing the instance you
+    tripped over is not fixing the defect.** The repo has two commands that
+    fetch a list of symbols and summarise them, and only one of them could
+    tell you it had failed.
+
+    The refusal itself was self-inflicted and is not part of the bug: a
+    verification script written an hour earlier held the chart lock while
+    spawning the backtests as subprocesses. The lock worked correctly. What
+    the lock exposed was that a total fetch failure still exits 0.
 
 Guards now check the data rather than the chart's description of itself: bar
 count against confirmed depth, price against a live quote, bar spacing

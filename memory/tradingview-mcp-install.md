@@ -14,6 +14,20 @@ To use: TradingView Desktop is installed at `/Applications/TradingView.app`. Lau
 `/Applications/TradingView.app/Contents/MacOS/TradingView --remote-debugging-port=9222`
 Port 9222 comes up fast, but the app needs a few seconds to warm up before charts read reliably.
 
+**`open -a` does not restart a running app, and this has already cost a
+session.** `open -a TradingView --args --remote-debugging-port=9222` launches
+it with the port only when it is *not* already running; against a live
+instance macOS just activates the existing process and discards `--args`
+silently -- no error, and the debug port still answers because the old
+process opened it. On 2026-11-03 a frozen chart was "restarted" this way
+three times and survived all three; `ps -eo lstart` showed the same pid from
+2h53m earlier. To actually restart it:
+`osascript -e 'quit app "TradingView"' && sleep 3 && open -a TradingView --args --remote-debugging-port=9222`
+**Verify with `ps -eo pid,lstart,etime,command | grep TradingView`** -- a
+start time older than the relaunch means it never restarted. A freeze that
+"clears on restart" has not been shown to clear on restart until that check
+passes.
+
 The sibling CLI `00fitzz.py` (a trading CLI: --backtest/--learn/--research/--simulate/--trade) drives the bridge via `node tradingview-mcp/src/cli/index.js`. Run it with `python3` (plain `python` is not on PATH). Node is under nvm — see [[node-nvm-setup]].
 
 **Cold-start gotcha (fixed 2026-08-28):** `load_bars` used to fire `set_symbol`,

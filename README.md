@@ -16,7 +16,7 @@ symbol/family significance sweeps over five strategy families, eleven
 symbols and three timeframes, plus a swept volatility gate and both
 public-data feeds, all corrected for the search that found them. Read it before running a sweep and reading a low p-value as news.
 
-It is also a log of eleven data bugs, every one of the same shape — a read that
+It is also a log of twelve data bugs, every one of the same shape — a read that
 was short, stale or another symbol's, passing itself off as complete. That
 section is the most reusable thing here.
 
