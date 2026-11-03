@@ -11,3 +11,4 @@
 - [Local workspace](local-workspace.md) — account specifics; untracked, stays off the public repo
 - [A unit test is not a call-site test](unit-test-not-callsite.md) — I shipped a TypeError past a green unit test; run the real entry point
 - [Fix the pattern, not the instance](fix-the-pattern-not-the-instance.md) — a bug in one entry point is usually in its sibling too; grep the shape before calling it fixed
+- [Guards that fail open](guards-that-fail-open.md) — a check that passes when it cannot evaluate protects nothing; verify from output, not from the suspect source

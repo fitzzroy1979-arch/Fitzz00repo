@@ -864,7 +864,7 @@ in isolation.
 
 ## Data bugs found along the way
 
-Twelve, all the same shape: a read that was short, stale or simply another
+Thirteen, all the same shape: a read that was short, stale or simply another
 symbol's, passing as valid. Each silently changed results rather than
 erroring.
 
@@ -1040,6 +1040,48 @@ erroring.
     spawning the backtests as subprocesses. The lock worked correctly. What
     the lock exposed was that a total fetch failure still exits 0.
 
+13. **The cross-symbol guard fails open.** Found 2026-11-03. A daily
+    backtest row labelled `OKX:ZBCNUSDT` reported buy-and-hold **-24.22**.
+    ZBCN's buy-and-hold over the same period is -35.83, -35.83, -35.88 and
+    -35.83 in the four other strategies run against the same bars. -24.22 is
+    `BITSTAMP:BTCUSD`. The row was BTC's data wearing ZBCN's name, and it
+    passed every guard in `load_bars`.
+
+    The reason is three lines of `_prices_agree`:
+
+        price = self._quote_price(symbol)
+        if price is None or not isinstance(last, (int, float)) or last <= 0:
+            return True
+
+    When the quote cannot be fetched the guard returns True, on the
+    reasoning that an unverifiable read should not be treated as a failed
+    one. But the quote goes through the same degraded bridge as the bars, so
+    it fails *together with* the thing it is checking. The strongest guard in
+    the toolkit switches itself off in precisely the conditions it exists
+    for, and reports nothing while doing it.
+
+    Entries 3, 4 and 10 were all caught by this guard, which is why it was
+    trusted. What none of them tested was the guard's own failure mode.
+
+    **The check that did catch it is independent of the bridge entirely.**
+    One symbol over one period has one buy-and-hold, whatever strategy is
+    traded on it. Comparing that figure for the same symbol across runs needs
+    no quote, no live data and no knowledge of the strategy -- it is an
+    internal consistency condition on output already on disk. `check_backtest.py`
+    now runs it alongside the within-run duplicate check.
+
+    It also shows how narrow the first version of that check was. Comparing
+    rows *within* a run would never have found this: only one row of the
+    `confluence` run survived, and a single row collides with nothing. The
+    contaminated row was the only row, and a duplicate check over one row
+    passes cleanly every time.
+
+    **Not yet fixed in the code.** `_prices_agree` still fails open. Making
+    it fail closed would refuse reads whenever a quote is briefly
+    unavailable, so the fix needs a retry-then-refuse path rather than a
+    flipped boolean, and that is not written. Until it is, a backtest is not
+    evidence until `check_backtest.py` passes on it.
+
 Guards now check the data rather than the chart's description of itself: bar
 count against confirmed depth, price against a live quote, bar spacing
 against the requested interval, and a lock against concurrent readers.
@@ -1151,6 +1193,47 @@ $0.0019 -- the thinnest book in the set, carrying the lowest p-value. Nor is
 any of this out of sample; each row is the best of a 178-to-20,123 config
 grid, measured on the data that chose it. Two rows rest on 10 and 12 round
 trips.
+
+## The daily backtest, on bars that were verified first
+
+Run 2026-11-03 after a genuine restart of the bridge, with every symbol
+checked for 86,400s spacing and its own price before a single backtest
+started. Five strategies over seven symbols, one year of daily bars, 10 bps.
+Of 35 pairs, **25 are verified**, nine were refused mid-run as the chart went
+stale, and one was contaminated (bug 13). `confluence` has no usable row and
+is excluded entirely rather than shown with a caveat.
+
+| symbol | sma_cross | follow_money | breakout | mean_revert | buy & hold |
+|---|---|---|---|---|---|
+| ZBCN | -38.87 | -1.15 | +13.01 | -8.70 | -35.83 |
+| FLR | -19.83 | -0.83 | -10.33 | **+22.59** | -56.07 |
+| XRP | -41.03 | -16.67 | +6.37 | +4.31 | -43.15 |
+| BTC | +0.87 | -33.82 | +0.69 | -22.04 | -24.24 |
+| CC | -39.86 | -11.17 | -28.52 | refused | -42.20 |
+| HBAR | -12.86 | -10.52 | -19.84 | refused | -58.67 |
+| QNT | +62.50 | +86.74 | +109.29 | refused | **+168.58** |
+
+**"Beats buy-and-hold" is close to meaningless on this tape.** Holding lost
+between 24% and 59% on six of the seven symbols, so beating it means losing
+less. `follow_money` on ZBCN beats holding by 35 points by losing 1.15% --
+on **one trade** in a year. Measured against cash instead, 5 of 25 verified
+results are positive and three of those five are QNT.
+
+**On the one symbol that rose, every strategy underperformed doing nothing.**
+QNT returned +168.58% held; the strategies captured +62.50%, +86.74% and
++109.29%. That is the shape of the whole study in one column: when there is a
+trend, the strategies take a fraction of it, and when there is not, they lose
+less than holding and the summary calls it a win.
+
+**The trade counts forbid any claim about win rates.** One to nine round
+trips per symbol per year. `mean_revert` is the best performer here (+22.59%
+on FLR, +4.31% on XRP) on five to seven trades -- and it is the same family
+the 4h sweep examined properly, where Reality Check refused it four times.
+
+One useful confirmation: `sma_cross` on CC returned **-39.86%**, matching to
+the digit the CC row from an earlier run that bug 10 had flagged as possibly
+another symbol. Reproduced on bars verified before use, that row was genuine
+CC, as the bug 10 correction concluded from reading the code.
 
 ## What would actually change the answer
 
