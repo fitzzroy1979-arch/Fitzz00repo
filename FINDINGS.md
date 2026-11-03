@@ -25,7 +25,7 @@ p ≤ 0.05, and none of them survived a second look:
 | CC mean_revert, 4h short | 0.038 | 0.024 | **0.473** | excluded | holdout -0.000884; gone by 50 bps; see bug 10 |
 | ZBCN mean_revert, 1h short | 0.037 | not re-run | 0.018 gated | not re-run | costs: gone by 25 bps |
 
-Chance alone puts 5% of sweeps under p = 0.05 — about 21 of the ~420 run
+Chance alone puts 5% of sweeps under p = 0.05 — about 23 of the ~450 run
 here. Five hits is *well below* what noise predicts, not above it. Finding a
 handful of sub-5% results in a search this wide is the expected outcome of
 searching, and the only honest reading of the table.
@@ -812,6 +812,55 @@ Two process notes from this run, both of which caught something:
   14400s spacing, last close matching a live quote — before an hour was
   spent on it.
 
+## The price of looking, measured twice more
+
+Run 2026-11-03, `--vol-gate` at 4h long-only: the five families each crossed
+with the volatility gate, threshold swept over 0/0.2/0.3/0.4/0.5/0.6 with
+0.0 — the ungated family — inside the grid so the gate has to beat the
+unfiltered version of itself. Thirty pairs reached (CC failed, see bug 10).
+
+| pair | cfgs | trades | win% | avgW | avgL | p(RC) | p(SPA) |
+|---|---|---|---|---|---|---|---|
+| ZBCN mean_revert, ungated | 72 | 48 | 83.3 | +12.1 | -3.9 | 0.096 | **0.008** |
+| ZBCN mean_revert, gated | 414 | 48 | 83.3 | +12.1 | -3.9 | 0.107 | **0.023** |
+| QNT mean_revert, ungated | 90 | 194 | 68.0 | +4.6 | -4.8 | 0.100 | **0.022** |
+| QNT mean_revert, gated | 495 | 194 | 68.0 | +4.6 | -4.8 | 0.118 | **0.065** |
+
+**The gate switched itself off and charged for the privilege.** Trades, win
+rate, average winner and average loser are identical to every digit across
+each pair of rows, so the sweep chose `volgate=0` on both — the strategy is
+the same strategy and the trades are the same trades. The only thing that
+changed is the grid: 5.75x wider for ZBCN, 5.5x for QNT.
+
+For that, ZBCN went 0.008 -> 0.023 and QNT went 0.022 -> **0.065**, crossing
+from significant to not. Significant pairs fell from 2 of 35 to 1 of 30, and
+CC's absence does not explain it: none of CC's five pairs was significant
+ungated either, so QNT lost significance to the gate rather than to the
+missing symbol. One of 30 against ~1.5 expected by chance is below noise.
+
+This is the second independent measurement of the cost of a wider grid with
+nothing found to confound it, and it agrees with the first. On 2026-10-26 the
+same effect measured 0.014 -> 0.035 on one pair; here it is **two pairs, the
+same mechanism, the same magnitude of about 2.9x**. Because the search
+rejected the gate outright, the entire p-value movement is the
+multiple-comparisons correction and none of it is discovery. Weigh any
+grid-widening idea against this number before weighing it against its own
+backtest.
+
+**The gate is now closed in five corners** — 4h long, 4h shorts, 1h long, 1h
+shorts, and this re-run of 4h long on fresh bars.
+
+One process note, recorded because it is the kind of thing this document
+exists to not hide: the first attempt at this run crashed on its second
+symbol. The exit-status fix committed earlier the same day (bug 9) had
+introduced `ok` as a fetch counter into a scope where `ok` already held the
+`block ok` column's "yes"/"NO", so it became a string and `ok += 1` raised
+TypeError. `_exit_status` had been unit-tested and was never wrong; the fault
+was at the call site, in a scope the test never entered. **A unit test of a
+function is not a test of the code that calls it.** Renamed to `fetched_ok`,
+and the three exit paths were then verified by real invocations rather than
+in isolation.
+
 ## Data bugs found along the way
 
 Ten, all the same shape: a read that was short, stale or simply another
@@ -864,14 +913,24 @@ erroring.
    then exits leaves it liable to quit (the Electron log shows a relaunch
    followed by a quit). `open -a TradingView --args
    --remote-debugging-port=9222` hands it to launchd and it stays up.
-10. **The cross-symbol read, caught live on 2026-11-03.** During the cost
-    scan the re-read guard rejected `OKX:CCUSDT`: the re-read closed at
-    193.31 against a cached series closing at 0.0933. Checked directly
-    afterwards, the bridge returned **193.31 for `OKX:CCUSDT` and 193.31 for
-    `COINBASE:QNTUSD`** — the same number for two instruments whose prices
-    differ by a factor of 2,000. The chart was serving QNT's data under CC's
-    name, which is entries 3 and 4 happening again, two months after the
-    guards for them went in.
+10. **The frozen chart: every symbol returns one symbol's price.** First
+    seen on 2026-11-03 when the re-read guard rejected `OKX:CCUSDT` — the
+    re-read closed at 193.31 against a cached series closing at 0.0933.
+    Recorded at first as a CC-specific cross-symbol read, which understated
+    it. Checking a control symbol showed the real shape: the bridge returned
+    **193.31 for `OKX:CCUSDT`, for `COINBASE:QNTUSD` *and* for
+    `BITSTAMP:BTCUSD`**, which trades near 76,500. The chart had frozen on
+    QNT and was answering every request with it, whatever symbol was asked
+    for. Requesting a third symbol did not unstick it and three consecutive
+    CC reads returned the same number; only restarting the app cleared it,
+    after which all symbols returned distinct correct prices.
+
+    It then recurred within the hour: on the gated sweep the CC re-read
+    closed at **1.2477**, which is XRP's price. **The stuck symbol rotates**,
+    so a check against one known-wrong value would not catch the next
+    occurrence. CC's reported feed depth also moved between runs, 1,584 bars
+    then 655. This is entries 3 and 4 again, two months after their guards
+    went in, and worse than either was written up as.
 
     The guard worked: CC was excluded rather than written into the series,
     and the run reported partial rather than success. This is the first
