@@ -384,6 +384,37 @@ def cost_scan(bars_path, family, levels, block, seed, shorts, holdout=0.33,
     return rows
 
 
+def _exit_status(ok, failed, symbols):
+    """
+    Exit code for a run, from how many symbols actually produced data.
+
+    This function exists because the script used to `return 0` unconditionally.
+    On 2026-11-03 the TradingView app quit mid-session, all seven symbols
+    reported "fetch failed", the table printed a row saying so for each, and
+    the script reported success -- so a cost scan chained behind it ran against
+    the same dead bridge. The failure was visible in the output and invisible
+    to anything checking $?.
+
+    0  every symbol fetched
+    1  nothing fetched -- the run produced no data at all
+    2  partial: some symbols are missing, so any count or comparison over
+       "all symbols" in the output is over a subset
+    """
+    if failed:
+        print(f"\n  !! {len(failed)} of {len(symbols)} symbols failed to fetch: "
+              f"{', '.join(failed)}")
+    if not ok:
+        print("  !! no data fetched -- this run produced nothing. If the bridge "
+              "is down,\n     relaunch with: open -a TradingView --args "
+              "--remote-debugging-port=9222")
+        return 1
+    if failed:
+        print("  !! results below cover the symbols that did fetch, not the "
+              "full set.")
+        return 2
+    return 0
+
+
 def main(argv=None):
     from fitzz.journal import extract_trades, render, separation
 
@@ -438,12 +469,15 @@ def main(argv=None):
 
     if args.cost_scan:
         levels = [float(x) for x in args.cost_scan.split(",") if x.strip()]
+        ok, failed = 0, []
         for sym in symbols:
             try:
                 path, n = fetch(sym, args.interval, args.bars, args.cache)
             except Exception as e:
                 print(f"{sym}: fetch failed: {str(e)[:60]}")
+                failed.append(sym)
                 continue
+            ok += 1
             for fam in families:
                 print(f"\n{sym}  {fam}{'  (shorts)' if args.shorts else ''}  "
                       f"{args.interval}  {n} bars")
@@ -468,19 +502,22 @@ def main(argv=None):
                 else:
                     print("\n  survives every cost level tested -- worth raising the "
                           "range.")
-        return 0
+        return _exit_status(ok, failed, symbols)
 
     print(f"{'symbol':<20}{'family':<14}{'bars':>6}{'cfgs':>7}{'trades':>7}"
           f"{'hit%':>7}{'win%':>7}{'avgW%':>7}{'avgL%':>7}"
           f"{'p(RC)':>8}{'p(SPA)':>8}  block ok")
     rows = []
     journals, by_family = [], {}
+    ok, failed = 0, []
     for sym in symbols:
         try:
             path, n = fetch(sym, args.interval, args.bars, args.cache)
         except Exception as e:
             print(f"{sym:<20}{'-':<14}{'':>6}  fetch failed: {str(e)[:40]}")
+            failed.append(sym)
             continue
+        ok += 1
         for fam in families:
             res = sweep(path, fam, args.cost_bps, args.block, args.seed,
                         shorts=args.shorts, vol_gate=args.vol_gate)
@@ -598,7 +635,7 @@ def main(argv=None):
             print("  symbol, not for trying several symbols. Across "
                   f"{len(live)} sweeps, expect")
             print(f"  about {0.05 * len(live):.1f} to clear 5% by chance alone.")
-    return 0
+    return _exit_status(ok, failed, symbols)
 
 
 if __name__ == "__main__":
