@@ -24,9 +24,17 @@ comparing that number for the same symbol across runs is an internal
 consistency condition on files already written. Prefer a verification that
 reads only the output over one that re-queries the suspect source.
 
+**The empty-input case is the same bug and is easy to miss.** On 2026-11-03
+the very checker written to catch the above -- `check_backtest.py`, which
+compares buy-and-hold across runs -- printed "nothing to check, this is not
+a pass" when its glob matched no files, **and exited 0**. It said in words
+that it had verified nothing and reported success to its caller in the same
+breath. "Cannot evaluate" and "had nothing to evaluate" are the same
+condition as far as the exit status is concerned.
+
 **How to apply:** when writing or reviewing a guard, ask what it returns when
-its own input is missing, and whether that case is independent of the failure
-it is meant to detect. If it is not independent, fail closed, or retry and
+its own input is missing or empty, and whether that case is independent of
+the failure it is meant to detect. If it is not independent, fail closed, or retry and
 then refuse — never pass silently. And when a guard has a good track record,
 that is a reason to test its failure mode, not to trust it. See
 [[tv-bridge-data-integrity]] and [[fix-the-pattern-not-the-instance]].

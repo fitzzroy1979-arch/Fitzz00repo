@@ -23,10 +23,21 @@ process opened it. On 2026-11-03 a frozen chart was "restarted" this way
 three times and survived all three; `ps -eo lstart` showed the same pid from
 2h53m earlier. To actually restart it:
 `osascript -e 'quit app "TradingView"' && sleep 3 && open -a TradingView --args --remote-debugging-port=9222`
-**Verify with `ps -eo pid,lstart,etime,command | grep TradingView`** -- a
-start time older than the relaunch means it never restarted. A freeze that
-"clears on restart" has not been shown to clear on restart until that check
-passes.
+**Verify with `ps -eo pid,lstart,command | grep "MacOS/TradingView "`** --
+and read the *command line*, not just the pid. A new pid is **not** enough:
+on 2026-11-03 two back-to-back `open -a ... --args` calls produced a fresh
+pid with no `--remote-debugging-port` at all, because the first call had
+already started the app and the second merely activated it and dropped the
+args. `open` exited 0 both times and CDP was simply dead. The only sound
+check is that the running pid's command line contains the port. A freeze
+that "clears on restart" has not been shown to clear on restart until that
+check passes.
+
+**The app also quits by itself.** On 2026-11-03 it exited twice in ninety
+minutes, once mid-run, after a clean `open -a` launch -- the whole process
+gone, not just the port. Long multi-symbol runs should therefore be one
+invocation per symbol where practical, and should check CDP between symbols,
+so a death costs one read rather than the batch.
 
 The sibling CLI `00fitzz.py` (a trading CLI: --backtest/--learn/--research/--simulate/--trade) drives the bridge via `node tradingview-mcp/src/cli/index.js`. Run it with `python3` (plain `python` is not on PATH). Node is under nvm — see [[node-nvm-setup]].
 
