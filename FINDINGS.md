@@ -703,9 +703,58 @@ result on its own:
   carries no information — the correlations above are computed over the real
   spread, but that query's bucket view should be ignored.
 
+## A fresh year, and an accidental control
+
+Re-run 2026-11-03 on a window not previously tested: daily bars,
+2025-11-03 to 2026-11-02, seven watchlist symbols, all five families at
+their default parameters. Buy-and-hold was **negative on six of seven**
+symbols, averaging -13.5%, so this is a falling-market regime rather than
+the one the earlier backtests covered.
+
+| family | beats b&h | beats cash (0%) | trades | avg return |
+|---|---|---|---|---|
+| `sma_cross` | 5/7 | 2/7 | 24 | -12.81% |
+| `follow_money` | 5/7 | 1/7 | 18 | +1.76% |
+| `breakout` | 6/7 | **4/7** | 46 | +10.10% |
+| `mean_revert` | 6/7 | 3/7 | 37 | +2.29% |
+| `confluence` | 6/7 | 0/7 | **0** | 0.00% |
+
+**`confluence` placed zero trades and "beat" buy-and-hold on six of seven
+symbols.** Five-of-five conditions never agreed once in a year across seven
+symbols, so it returned exactly 0.00% -- and scored the same as `breakout`,
+which traded 46 times. A do-nothing control walked into the run by accident
+and won.
+
+That is the whole lesson of the window. In a year where holding lost 13.5%,
+*being out of the market is the benchmark-beating move*, and four of five
+families are being credited for it. Change the benchmark to cash, which is
+the honest comparison when the alternative is negative, and the column
+collapses: 4/7, 3/7, 2/7, 1/7.
+
+The other direction confirms it. QNT was the one symbol that rose, +167%
+held, and **every family underperformed holding it**:
+
+| family | QNT | vs hold | shortfall |
+|---|---|---|---|
+| `breakout` | +109.29% | +167.15% | -57.9 pts |
+| `follow_money` | +86.74% | +166.88% | -80.1 pts |
+| `sma_cross` | +61.88% | +166.79% | -104.9 pts |
+| `mean_revert` | +45.00% | +167.83% | -122.8 pts |
+| `confluence` | 0.00% | +167.96% | -168.0 pts |
+
+So the strategies lose to cash when the market falls and lose to the asset
+when it rises. Note also that `confluence` reads as *improved* against the
+earlier record -- 1/6 before, 6/7 now -- and the entire gain is it having
+stopped trading. Reporting that as progress would be a straightforward
+error, and it is the kind this document exists to catch.
+
+Per-symbol trade counts were 0-9. That is far too few to sweep: it is the
+statistical-power problem recorded above, and the reason the real search
+runs at 4h where the same configs make 90-130 trades.
+
 ## Data bugs found along the way
 
-Eight, all the same shape: a read that was short, stale or simply another
+Nine, all the same shape: a read that was short, stale or simply another
 symbol's, passing as valid. Each silently changed results rather than
 erroring.
 
@@ -739,6 +788,22 @@ erroring.
    `--max-rows`, and returns `complete` so a caller can tell a full ordering
    from a partial one. The commit message for 2d7d67d calls this the seventh
    bug of this shape; counting this list, it is the eighth.
+9. `run_sweep_4h.py` **exits 0 when every fetch fails.** On 2026-11-03 the
+   TradingView app quit between a backtest and a sweep; all seven symbols
+   returned `fetch failed: Can't reach TradingView Desktop`, the script
+   printed a table whose every row said so, and returned success. A caller
+   checking the exit code -- a script, a scheduler, or a chained second
+   command -- records a clean run that produced no data, and a cost scan was
+   in fact queued behind it against the dead bridge. Same shape as the other
+   eight, one level up: not a short read passing as complete, but an empty
+   *run* passing as a successful one. The failure is visible in the output
+   and invisible to the exit status.
+
+   Launch note, since it caused the above: starting the app with
+   `nohup .../TradingView --remote-debugging-port=9222 &` from a shell that
+   then exits leaves it liable to quit (the Electron log shows a relaunch
+   followed by a quit). `open -a TradingView --args
+   --remote-debugging-port=9222` hands it to launchd and it stays up.
 
 Guards now check the data rather than the chart's description of itself: bar
 count against confirmed depth, price against a live quote, bar spacing
