@@ -1031,14 +1031,42 @@ erroring.
     recorded for bug 9 was "test the call site, not the function"; the
     lesson here is narrower and more annoying -- **when a defect is a
     property of a pattern rather than of a line, fixing the instance you
-    tripped over is not fixing the defect.** The repo has two commands that
-    fetch a list of symbols and summarise them, and only one of them could
-    tell you it had failed.
+    tripped over is not fixing the defect.**
 
     The refusal itself was self-inflicted and is not part of the bug: a
     verification script written an hour earlier held the chart lock while
     spawning the backtests as subprocesses. The lock worked correctly. What
     the lock exposed was that a total fetch failure still exits 0.
+
+    **Correction to the scope, and the fix, same day.** The entry above was
+    written as a backtest defect -- "`cmd_backtest` returns its results list
+    rather than a status" -- and said the repo had two such commands. Both
+    are wrong. `main()` ended in an unconditional `return 0` and discarded
+    whatever any command returned, so **every** symbol-looping command
+    reported success regardless: `cmd_backtest`, `cmd_learn`, `cmd_research`
+    and `cmd_simulate`, the last with two return points including an early
+    one in its `--json` branch. Four commands, not one, and the shared cause
+    was one line in `main` rather than anything in the commands. Having just
+    written down that a defect can be a property of a pattern, the first
+    diagnosis of it looked at the single instance that was tripped over.
+
+    Fixed with one helper, `_fetch_exit_status`, which all four call. It
+    takes both result shapes the commands use -- a list of dicts and a
+    `{symbol: result}` mapping -- and returns 0 when every symbol produced a
+    result, 1 when none did, 2 when some did not; `main` propagates the worst
+    status across whichever modes ran. The `except BridgeError` arm, which
+    returned 2, now returns 1: a bridge error escaping a command means that
+    command produced nothing, which is the same outcome as every symbol
+    failing, and a status code that means two different things is the defect
+    this is meant to remove.
+
+    Verified against a run, not against the function. 0 for a healthy symbol
+    and 1 for a bad one were confirmed through the live bridge. The remaining
+    cases -- partial, total failure, a bridge that dies before the loop --
+    were confirmed with only `load_bars` and `get_watchlist` stubbed, so the
+    command, the helper and `main`'s propagation are the real code; the
+    bridge is not. TradingView had restarted itself without the debug port
+    by then, which is the honest reason those three are not live.
 
 13. **The cross-symbol guard fails open.** Found 2026-11-03. A daily
     backtest row labelled `OKX:ZBCNUSDT` reported buy-and-hold **-24.22**.
@@ -1076,15 +1104,33 @@ erroring.
     contaminated row was the only row, and a duplicate check over one row
     passes cleanly every time.
 
-    **Not yet fixed in the code.** `_prices_agree` still fails open. Making
-    it fail closed would refuse reads whenever a quote is briefly
-    unavailable, so the fix needs a retry-then-refuse path rather than a
-    flipped boolean, and that is not written. Until it is, a backtest is not
-    evidence until `check_backtest.py` passes on it.
+    **Fixed, same day.** `_prices_agree` is now tri-state -- `True`,
+    `False`, and `None` for "no quote to compare against" -- and `load_bars`
+    refuses a read it could not verify instead of accepting it. A flipped
+    boolean would have been wrong: an unverifiable read is retried first,
+    since a later attempt often does get a quote, and
+    `FITZZ_ALLOW_UNVERIFIED_BARS=1` accepts one anyway for a symbol whose
+    quote the bridge genuinely will not serve. That path prints to stderr and
+    says in as many words that the read is not verified, so the escape hatch
+    cannot be taken silently.
+
+    All four branches were exercised through `load_bars` itself rather than
+    through the function in isolation, which is the distinction bugs 9 and 12
+    were shipped for missing: a real quote accepted 120 bars; no quote
+    refused; no quote with the override accepted and warned; a quote wrong by
+    1000x refused. The backtest CLI was then run end to end to confirm
+    nothing regressed.
+
+    `check_backtest.py` stays useful regardless -- it verifies output already
+    written, needs no bridge, and would catch a contamination that arrived by
+    some route this guard does not cover.
 
 Guards now check the data rather than the chart's description of itself: bar
 count against confirmed depth, price against a live quote, bar spacing
-against the requested interval, and a lock against concurrent readers.
+against the requested interval, and a lock against concurrent readers. A
+guard that cannot check refuses rather than passes, and the exit status of
+both entry points now describes what the run produced rather than merely
+whether it crashed.
 
 ## Shorts on the gated grid: a lower p that means less
 

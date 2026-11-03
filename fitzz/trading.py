@@ -382,7 +382,7 @@ class TradingViewBridge:
         # the usual victim. The whole switch-and-read is inside the retry,
         # because the read is where a half-finished switch actually shows up.
         last_err = None
-        bars = available = None
+        bars = available = unverified = None
         for attempt in range(3):
             self.set_symbol(symbol)
             self.set_timeframe(tv_resolution)
@@ -402,16 +402,35 @@ class TradingViewBridge:
                     f"before its data caught up.")
                 time.sleep(self.settle)
                 continue
-            if self._prices_agree(symbol, candidate):
+            agrees = self._prices_agree(symbol, candidate)
+            if agrees:
                 bars = candidate
                 break
-            last_err = BridgeError(
-                f"{symbol}: bars do not match this symbol's quote (last bar "
-                f"{candidate[-1].get('close') if candidate else None}). The "
-                f"chart reported the switch before its data caught up.")
+            if agrees is False:
+                last_err = BridgeError(
+                    f"{symbol}: bars do not match this symbol's quote (last bar "
+                    f"{candidate[-1].get('close') if candidate else None}). The "
+                    f"chart reported the switch before its data caught up.")
+            else:
+                # No quote. Keep the read, but do not accept it here -- a
+                # later attempt may get a quote, and if none ever does the
+                # run refuses rather than guessing.
+                unverified = candidate
+                last_err = BridgeError(
+                    f"{symbol}: no quote was available to confirm these bars "
+                    f"belong to this symbol, after {len(candidate)} bars read. "
+                    f"Refusing an unverifiable read -- set "
+                    f"FITZZ_ALLOW_UNVERIFIED_BARS=1 to accept it anyway.")
             time.sleep(self.settle)
         if bars is None:
-            raise last_err
+            if unverified is not None and os.environ.get(
+                    "FITZZ_ALLOW_UNVERIFIED_BARS"):
+                print(f"! {symbol}: no quote could confirm these bars; "
+                      f"accepting them because FITZZ_ALLOW_UNVERIFIED_BARS is "
+                      f"set. This read is not verified.", file=sys.stderr)
+                bars = unverified
+            else:
+                raise last_err
 
         # Confirm the bars belong to this symbol, not the last one.
         #
@@ -537,16 +556,25 @@ class TradingViewBridge:
         """
         Is this series plausibly the one `symbol` trades at?
 
-        Compares the last bar's close against a live quote. Returns True when
-        no quote is available -- an unverifiable read should not be treated as
-        a failed one.
+        Tri-state, because "cannot tell" is not "fine":
+
+            True  -- the last bar matches a live quote for this symbol
+            False -- it does not; these are another instrument's bars
+            None  -- there was no quote to compare against
+
+        Returning True for the None case was bug 13. The quote travels the
+        same bridge as the bars, so it fails *together with* the thing it is
+        meant to verify, and the guard went blind in exactly the conditions
+        it exists for -- BTC's series was accepted as ZBCN's. The caller
+        decides what an unverifiable read is worth; it must not be silently
+        treated as a pass.
         """
         if not bars:
-            return True
+            return None
         price = self._quote_price(symbol)
         last = bars[-1].get("close")
         if price is None or not isinstance(last, (int, float)) or last <= 0:
-            return True
+            return None
         ratio = float(last) / price
         return lo <= ratio <= hi
 
@@ -1755,6 +1783,47 @@ def check_trade_window(start_h, end_h, ignore):
 # Commands
 # --------------------------------------------------------------------------- #
 
+def _fetch_exit_status(results, what="symbol(s)"):
+    """
+    0 every symbol produced a result / 1 none did / 2 some did not.
+
+    A run that fetched nothing must not exit 0. Everything above this --
+    shell loops, wrappers, CI -- reads the exit status, not the rows, so
+    exiting 0 over a list of error objects reports success for a run that
+    produced no results at all. That was bug 12, and bug 9 before it in
+    `run_sweep_4h.py`: the same defect in the sibling tool, fixed there and
+    not looked for here.
+
+    Takes either a list of result dicts or a {symbol: result} mapping, since
+    the commands use both shapes.
+    """
+    if isinstance(results, dict):
+        pairs = list(results.items())
+    else:
+        pairs = [(r.get("symbol", "?") if isinstance(r, dict) else "?", r)
+                 for r in results]
+    failed = [name for name, row in pairs
+              if isinstance(row, dict) and row.get("error")]
+    total = len(pairs)
+    if not total:
+        print("! no symbols were processed -- this run produced no results.",
+              file=sys.stderr)
+        return 1
+    if failed:
+        print(f"! {len(failed)} of {total} {what} failed: "
+              f"{', '.join(str(f) for f in failed)}", file=sys.stderr)
+    if len(failed) == total:
+        print("! nothing was fetched -- this run produced no results. If the "
+              "bridge is down, relaunch TradingView with the debug port and "
+              "check `ps -eo lstart` shows a new process.", file=sys.stderr)
+        return 1
+    if failed:
+        print("! results cover the symbols that succeeded, not the full set.",
+              file=sys.stderr)
+        return 2
+    return 0
+
+
 def cmd_backtest(args, bridge):
     tv_res = resolve_interval(args.interval)
     capped, wanted = period_to_bars(args.period, tv_res)
@@ -1843,7 +1912,7 @@ def cmd_backtest(args, bridge):
         print(json.dumps(display, indent=2))
     else:
         print_backtest_summary(display)
-    return display
+    return _fetch_exit_status(results)
 
 
 def _is_proven(m, min_trades):
@@ -2262,7 +2331,7 @@ def cmd_learn(args, bridge):
             else:
                 print(f"    {sym:<14} — {results[sym].get('error', 'no result')}")
         print("═" * 64)
-    return results
+    return _fetch_exit_status(results)
 
 
 def _print_best(best):
@@ -2386,7 +2455,7 @@ def cmd_research(args, bridge):
     else:
         for sym in symbols:
             _print_research(results[sym])
-    return results
+    return _fetch_exit_status(results)
 
 
 def _print_research(res):
@@ -2593,12 +2662,12 @@ def cmd_simulate(args, bridge):
 
     if args.json:
         print(json.dumps(results, indent=2, default=str))
-        return results
+        return _fetch_exit_status(results)
     for res in results:
         _print_sim(res, blotter=(len(symbols) == 1))
     if len(symbols) > 1:
         _print_sim_summary(results)
-    return results
+    return _fetch_exit_status(results)
 
 
 def _print_sim(res, blotter=False):
@@ -2996,19 +3065,27 @@ def main(argv=None):
 
     bridge = TradingViewBridge(repo=args.tv_repo, settle=args.settle, verbose=args.verbose)
 
+    # Worst status across the modes that ran: 1 if a command fetched nothing,
+    # 2 if it fetched some of what was asked for. The exit code then describes
+    # what the run produced, not merely whether it crashed (bug 12).
+    status = 0
+
+    def worst(current, returned):
+        return max(current, returned) if isinstance(returned, int) else current
+
     try:
         if args.trade:
             if not args.action or args.amount is None:
                 raise SystemExit("--trade requires --action buy|sell and --amount.")
             cmd_trade(args, bridge)
         if args.backtest:
-            cmd_backtest(args, bridge)
+            status = worst(status, cmd_backtest(args, bridge))
         if args.learn:
-            cmd_learn(args, bridge)
+            status = worst(status, cmd_learn(args, bridge))
         if args.simulate is not None:
-            cmd_simulate(args, bridge)
+            status = worst(status, cmd_simulate(args, bridge))
         if args.research is not None:
-            cmd_research(args, bridge)
+            status = worst(status, cmd_research(args, bridge))
         if args.futures_trade is not None:
             cmd_futures_trade(args, bridge)
         if args.futures_portfolio:
@@ -3017,8 +3094,12 @@ def main(argv=None):
             cmd_futures_close(args, bridge)
     except BridgeError as e:
         print(f"error: {e}", file=sys.stderr)
-        return 2
-    return 0
+        # 1, not 2: a BridgeError escaping a command means that command
+        # produced nothing at all, which is the same outcome as every symbol
+        # failing. 2 is reserved for a partial run, and a status that means
+        # two different things is the bug this is part of fixing.
+        return 1
+    return status
 
 
 if __name__ == "__main__":
