@@ -22,6 +22,21 @@ Two checks, because the first one alone missed a real contamination:
    carried BITSTAMP:BTCUSD's -24.22; check 1 could not see it, because only
    one row of that run survived and a single row collides with nothing.
 
+   "Agree" is relative, not absolute. Buy-and-hold runs to the last bar and
+   the last bar is the one still forming, so the same symbol over the same
+   labelled window drifts between runs made hours apart -- and an absolute
+   tolerance is the wrong shape for it, being loose against a -35% hold and
+   tight against a +169% one. An earlier TOL of 1.0 percentage points
+   reported CC (2.5% drift) and QNT (0.6% drift) as contaminated alongside
+   the one genuine case. The comparison is therefore on the gross multiple,
+   1 + bh/100, with a relative tolerance.
+
+   What this cannot do: distinguish contamination between two symbols whose
+   returns over the window happen to be within REL_TOL of each other. The
+   genuine ZBCN case was an 18% spread against a 2.5% worst drift, which is
+   a comfortable margin, but it is a margin and not a proof. Check 1 is the
+   exact one; this is the sensitive one.
+
 Exit 1 if either check finds something.
 """
 import glob
@@ -29,13 +44,17 @@ import json
 import sys
 from collections import defaultdict
 
-TOL = 1.0          # percentage points; same bars, so agreement should be exact
+REL_TOL = 0.05     # relative, on the gross multiple -- see check 2 above.
+                   # Covers a day of crypto drift in the still-forming last
+                   # bar; the worst drift measured so far is 2.5%.
 
 
 def load(pattern):
     rows, errors, unreadable = [], [], []
     for path in sorted(glob.glob(pattern)):
-        tag = path.split("bt_")[-1].replace(".json", "")
+        name = path.rsplit("/", 1)[-1]
+        tag = name[3:] if name.startswith("bt_") else name
+        tag = tag.replace(".json", "")
         try:
             blob = json.load(open(path))
         except (OSError, ValueError) as e:
@@ -56,8 +75,12 @@ def main(pattern):
         print(f"  refused   {tag:<14} {r['symbol']:<18} {r['error'][:60]}")
     print(f"\n{len(rows)} usable rows, {len(errors)} refused\n")
     if not rows:
-        print("No usable rows: nothing to check. This is not a pass.")
-        return 0
+        # Exit 1, not 0. This said "this is not a pass" and then exited 0,
+        # which is the fail-open shape of bugs 9, 12 and 13 reappearing in
+        # the tool written to catch them: a verifier that verified nothing
+        # must not report success to whatever is reading its status.
+        print("No usable rows: nothing was checked, so nothing is verified.")
+        return 1
 
     bad = 0
 
@@ -75,11 +98,23 @@ def main(pattern):
     for tag, r in rows:
         bh[r["symbol"]][tag] = r["buy_hold_pct"]
     for sym, d in sorted(bh.items()):
-        vals = list(d.values())
-        if len(vals) > 1 and max(vals) - min(vals) > TOL:
+        if len(d) < 2:
+            continue
+        gross = [1.0 + v / 100.0 for v in d.values()]
+        lo, hi = min(gross), max(gross)
+        if lo <= 0:
             bad += 1
-            detail = "  ".join(f"{k}={v:.2f}" for k, v in sorted(d.items()))
-            print(f"  DISAGREES {sym}: buy-and-hold differs across runs -- "
+            print(f"  IMPOSSIBLE {sym}: a buy-and-hold of {min(d.values()):.2f} "
+                  f"means the price reached zero.")
+            continue
+        spread = hi / lo - 1.0
+        detail = "  ".join(f"{k}={v:.2f}" for k, v in sorted(d.items()))
+        if spread > REL_TOL:
+            bad += 1
+            print(f"  DISAGREES {sym}: buy-and-hold spans {spread:.1%} across "
+                  f"runs, over the {REL_TOL:.0%} drift allowance -- {detail}")
+        elif spread > REL_TOL / 5:
+            print(f"  drift     {sym:<18} {spread:.1%}, within allowance -- "
                   f"{detail}")
 
     print(f"\n{bad} problem(s) found." if bad else "\nBoth checks clean.")

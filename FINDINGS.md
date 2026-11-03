@@ -1245,41 +1245,108 @@ trips.
 Run 2026-11-03 after a genuine restart of the bridge, with every symbol
 checked for 86,400s spacing and its own price before a single backtest
 started. Five strategies over seven symbols, one year of daily bars, 10 bps.
-Of 35 pairs, **25 are verified**, nine were refused mid-run as the chart went
-stale, and one was contaminated (bug 13). `confluence` has no usable row and
-is excluded entirely rather than shown with a caveat.
+The first pass left nine pairs refused mid-run and one contaminated (bug 13);
+**all 35 are now filled**, the refused pairs re-run later the same morning
+and the contaminated `confluence` ZBCN row discarded and re-read rather than
+kept.
 
-| symbol | sma_cross | follow_money | breakout | mean_revert | buy & hold |
-|---|---|---|---|---|---|
-| ZBCN | -38.87 | -1.15 | +13.01 | -8.70 | -35.83 |
-| FLR | -19.83 | -0.83 | -10.33 | **+22.59** | -56.07 |
-| XRP | -41.03 | -16.67 | +6.37 | +4.31 | -43.15 |
-| BTC | +0.87 | -33.82 | +0.69 | -22.04 | -24.24 |
-| CC | -39.86 | -11.17 | -28.52 | refused | -42.20 |
-| HBAR | -12.86 | -10.52 | -19.84 | refused | -58.67 |
-| QNT | +62.50 | +86.74 | +109.29 | refused | **+168.58** |
+| symbol | sma_cross | follow_money | breakout | mean_revert | confluence | buy & hold |
+|---|---|---|---|---|---|---|
+| ZBCN | -38.87 | -1.15 | +13.01 | -8.01 | no trades | -35.83 |
+| FLR | -19.83 | -0.83 | -10.33 | **+22.59** | no trades | -56.07 |
+| XRP | -41.03 | -16.67 | +6.37 | +4.37 | no trades | -43.15 |
+| BTC | +0.87 | -33.82 | +0.69 | -21.98 | no trades | -24.24 |
+| CC | -39.86 | -11.17 | -28.52 | -11.69 | no trades | -42.20 |
+| HBAR | -12.86 | -10.52 | -19.84 | -8.32 | no trades | -58.67 |
+| QNT | +62.50 | +86.74 | +109.29 | +45.00 | no trades | **+168.58** |
+
+(Buy-and-hold is quoted from the first pass. The re-runs give the same figure
+to within 2.5% relative -- the last bar is the one still forming, so it drifts
+with the live price between runs; see the `check_backtest.py` note below.)
+
+**`confluence` never trades.** Zero round trips on all seven symbols over a
+full year of daily bars. The family is simply inert at this timeframe: its
+conditions do not co-occur. Six of its seven rows would score as "beats
+buy-and-hold", which is cash sitting out a bear market and the clearest
+illustration of how little that comparison means. Those seven rows are
+excluded from the tallies below, which cover the **28 pairs that traded**.
 
 **"Beats buy-and-hold" is close to meaningless on this tape.** Holding lost
 between 24% and 59% on six of the seven symbols, so beating it means losing
-less. `follow_money` on ZBCN beats holding by 35 points by losing 1.15% --
-on **one trade** in a year. Measured against cash instead, 5 of 25 verified
-results are positive and three of those five are QNT.
+less. 22 of the 28 traded pairs beat holding. `follow_money` on ZBCN beats
+holding by 35 points by losing 1.15% -- on **one trade** in a year. Measured
+against cash instead, 10 of 28 are positive, and of those ten **four are
+QNT** (where all four underperform holding) and two are BTC at +0.87% and
++0.69%, which is zero. That leaves four results in the whole 28 that are
+both positive and not explained by one rising symbol: FLR mean_revert
++22.59%, ZBCN breakout +13.01%, XRP breakout +6.37%, XRP mean_revert +4.37%
+-- on five to seven round trips each.
 
 **On the one symbol that rose, every strategy underperformed doing nothing.**
-QNT returned +168.58% held; the strategies captured +62.50%, +86.74% and
-+109.29%. That is the shape of the whole study in one column: when there is a
-trend, the strategies take a fraction of it, and when there is not, they lose
-less than holding and the summary calls it a win.
+QNT returned +168.58% held; the four that traded captured +45.00%, +62.50%,
++86.74% and +109.29%, and the fifth never entered. That is the shape of the
+whole study in one column: when there is a trend, the strategies take a
+fraction of it, and when there is not, they lose less than holding and the
+summary calls it a win.
 
 **The trade counts forbid any claim about win rates.** One to nine round
-trips per symbol per year. `mean_revert` is the best performer here (+22.59%
-on FLR, +4.31% on XRP) on five to seven trades -- and it is the same family
-the 4h sweep examined properly, where Reality Check refused it four times.
+trips per pair per year, median five. `mean_revert` is the best performer
+here (+22.59% on FLR, +4.37% on XRP) on five to seven trades -- and it is the
+same family the 4h sweep examined properly, where Reality Check refused it
+four times. Its completed row set makes the point again: QNT shows a **100%
+win rate** over five round trips while returning +45.00% against +169% held.
+A perfect win rate on five trades, underperforming the thing it is measured
+against by 124 points, is the best possible demonstration that win rate is
+not a result.
 
 One useful confirmation: `sma_cross` on CC returned **-39.86%**, matching to
 the digit the CC row from an earlier run that bug 10 had flagged as possibly
 another symbol. Reproduced on bars verified before use, that row was genuine
 CC, as the bug 10 correction concluded from reading the code.
+
+### Filling the nine refused pairs, and what it cost
+
+The re-run needed three launches of TradingView to get through, and the
+bridge is the limiting factor rather than the computation:
+
+- **The app quit by itself twice in ninety minutes**, once mid-run, after a
+  clean `open -a` launch with the debug port. The process was gone entirely,
+  not merely the port. `mean_revert` completed all seven; `confluence` got
+  three symbols in and then reported `Can't reach TradingView Desktop` for
+  the remaining four. The second half was finished one symbol per
+  invocation, so that a third death would cost one symbol instead of four.
+- **The new exit status earned its place immediately.** That partial
+  `confluence` run returned **2** and named its four casualties on stderr --
+  the first time bug 12's fix did real work rather than being tested. Under
+  the old code it would have exited 0 over four error objects.
+- **The `--args` trap from the bug 10 correction caught me again.** After the
+  crash I issued `open -a TradingView --args --remote-debugging-port=9222`
+  twice; the first had already started the app, so the second activated the
+  live instance and silently discarded the port. `open` exited 0 both times.
+  The only place it shows is `ps`, which is why the launch is now always
+  followed by reading the actual command line of the actual pid.
+
+`check_backtest.py` then flagged **three** disagreements across all eleven
+result files. Only one was real -- the known bug 13 `confluence` ZBCN row at
+-24.22, standing 18.2% away from the six genuine ZBCN readings. The other
+two were the checker's fault:
+
+- Its tolerance was **1.0 percentage point, absolute**, which is loose
+  against a -35% hold and tight against a +169% one. Buy-and-hold is measured
+  to the last bar and the last bar is the one still forming, so the same
+  symbol over the same labelled window drifts between runs made hours apart.
+  CC drifted 2.5% and QNT 0.6%, both reported as contamination. The
+  comparison is now relative, on the gross multiple, which separates a 2.5%
+  drift from an 18.2% substitution. It does **not** separate a substitution
+  between two symbols whose year returns happen to agree within the
+  allowance, and that limit is now written in the file.
+- Given a glob that matched nothing it printed "nothing to check, this is
+  not a pass" **and exited 0**. A verifier that verified nothing reporting
+  success to its caller is bugs 9, 12 and 13 in the tool written to catch
+  them. It exits 1 now.
+
+With the contaminated row dropped, 39 usable rows across the retained files
+pass both checks.
 
 ## What would actually change the answer
 
