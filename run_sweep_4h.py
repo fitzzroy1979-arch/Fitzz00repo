@@ -24,6 +24,15 @@ before being trusted, because a short read can mean a young asset or a chart
 that had not finished paging history -- and caching the latter would poison
 every run after it.
 
+Two different trade counts appear, and they are not the same measure:
+`legs` counts position TRANSITIONS, which is what the sweep scores and what
+--min-trades filters on -- an entry and its exit are two legs, and a flip
+from long to short is one. `trips` counts round trips, which is what win%,
+avgW% and avgL% are computed over. Legs run about double trips, so a row
+quoting one count beside the other's win rate reads as if the win rate
+covered twice the trades it does; that was the old single `trades` column,
+and it is bug 11.
+
 Two different "win rates" appear, and they are not the same measure:
 `hit%` is the share of active BARS the winner got directionally right,
 which is what the sweep scores; `win%` is the share of round-trip TRADES
@@ -504,8 +513,8 @@ def main(argv=None):
                           "range.")
         return _exit_status(fetched_ok, failed, symbols)
 
-    print(f"{'symbol':<20}{'family':<14}{'bars':>6}{'cfgs':>7}{'trades':>7}"
-          f"{'hit%':>7}{'win%':>7}{'avgW%':>7}{'avgL%':>7}"
+    print(f"{'symbol':<20}{'family':<14}{'bars':>6}{'cfgs':>7}{'legs':>6}"
+          f"{'trips':>7}{'hit%':>7}{'win%':>7}{'avgW%':>7}{'avgL%':>7}"
           f"{'p(RC)':>8}{'p(SPA)':>8}  block ok")
     rows = []
     journals, by_family = [], {}
@@ -534,9 +543,10 @@ def main(argv=None):
             w = f"{ts['win_pct']:>7.1f}" if ts else f"{'-':>7}"
             aw = f"{ts['avg_win']:>7.1f}" if ts else f"{'-':>7}"
             al = f"{ts['avg_loss']:>7.1f}" if ts else f"{'-':>7}"
+            tp = f"{ts['trades']:>7}" if ts else f"{'-':>7}"
             print(f"{sym:<20}{fam:<14}{res.get('n_bars', n):>6}"
-                  f"{res.get('n_configs', 0):>7}{d.get('trades', 0):>7}"
-                  f"{hit:>7.1f}{w}{aw}{al}"
+                  f"{res.get('n_configs', 0):>7}{d.get('trades', 0):>6}"
+                  f"{tp}{hit:>7.1f}{w}{aw}{al}"
                   f"{res.get('p_rc', float('nan')):>8.3f}"
                   f"{res.get('p_spa', float('nan')):>8.3f}  {ok}")
             rows.append((sym, fam, res.get("p_spa"), ts))

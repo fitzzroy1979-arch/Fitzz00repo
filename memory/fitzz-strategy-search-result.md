@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-As of 2026-11-03, the fitzz strategy search at `~/Desktop/AI` has run ~450 symbol/family significance sweeps: five families (`sma_cross`, `follow_money`, `breakout`, `mean_revert`, `confluence`), long and short, eleven symbols, timeframes 1d/4h/1h, costs 10/25/50/100 bps, plus a swept volatility-regime entry gate in all four timeframe/direction corners and a fresh-bars re-run of one. **Result: no detectable edge anywhere.**
+As of 2026-11-03, the fitzz strategy search at `~/Desktop/AI` has run ~480 symbol/family significance sweeps: five families (`sma_cross`, `follow_money`, `breakout`, `mean_revert`, `confluence`), long and short, eleven symbols, timeframes 1d/4h/1h, costs 10/25/50/100 bps, plus a swept volatility-regime entry gate in all four timeframe/direction corners and a fresh-bars re-run of one. **Result: no detectable edge anywhere.**
 
 Watchlist / main focus: BTC, XRP, FLR, ZBCN, CC (Canton Network), HBAR, QNT. Out-of-sample set: SOL, ADA, LINK, DOT. Account specifics are in [[local-workspace]], which is not tracked.
 

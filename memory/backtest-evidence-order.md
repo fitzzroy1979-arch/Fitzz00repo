@@ -5,7 +5,7 @@ metadata:
   type: feedback
 ---
 
-A backtest headline ("beats hold on 5 of 6 symbols") is **never** a finding. Before reporting a candidate as real, run these gates in this order, cheapest and most decisive first:
+A backtest headline ("beats hold on 5 of 6 symbols") is **never** a finding. Measured on 2026-11-03 over ten sweep winners: the Spearman rank correlation between p(SPA) and realised return is **-0.32 compounded, -0.22 at fixed stake** -- nil at n=10. The best equity curve of the ten (+470% of stake, 12.95x compounded) had p(SPA) = **0.897**, and one config with p = 1.000 *lost* 31% compounded while making +111% fixed-stake, so sizing alone flipped its sign. Return tells you almost nothing about whether an edge is real. Before reporting a candidate as real, run these gates in this order, cheapest and most decisive first:
 
 1. **Cost scan first.** `fitzz`'s `--cost-scan` (10/25/50/100 bps) disqualifies most candidates in one step and costs far less than a sweep. "What round-turn cost does this need?" is a fact about the instrument — an edge that needs 10 bps on a thin small-cap is dead on the spread it will actually pay, whatever its p-value.
 2. **Both SPA and Reality Check — but their agreement is not a second opinion.** They split on most candidates in the 2026-10 search (SPA 0.021 vs RC 0.113; 0.035 vs 0.154) and the conservative one — RC — was right every time, so clearing SPA alone is not clearing. When they *agree*, that is still one piece of evidence, not two: both correct the same in-sample quantity for the same grid search, and neither can see data that was never searched. On 2026-10-27 QNT mean_revert 1h short cleared both (SPA 0.009, RC 0.047) with a holdout of **-0.000673** — negative at every cost level, three times the in-sample edge with the sign reversed. Both were wrong; only the holdout caught it.
@@ -18,6 +18,6 @@ A backtest headline ("beats hold on 5 of 6 symbols") is **never** a finding. Bef
 
 **An unstable best-parameter is itself the verdict.** Across those 35 fits the winning gate threshold was near-uniform over the grid (5/9/4/2/7/8), and the value that motivated the whole test won least often. A parameter whose optimum scatters across independent fits is not measuring the market. That signal is cheaper and more convincing than the p-value.
 
-**Why:** Across ~450 sweeps on the fitzz toolkit every single candidate died at one of these gates, and the expensive gates were the ones that found nothing new. Running them out of order wastes hours and, worse, builds confidence in an artifact.
+**Why:** Across ~480 sweeps on the fitzz toolkit every single candidate died at one of these gates, and the expensive gates were the ones that found nothing new. Running them out of order wastes hours and, worse, builds confidence in an artifact.
 
 **How to apply:** When a sweep returns something under 5%, do not report it as promising. Run the cost scan, then quote SPA *and* RC, the sweep count, and the holdout together, in that order. If a gate fails, say the candidate is dead — do not soften it. See [[fitzz-strategy-search-result]] and [[backtest-signal-design]].

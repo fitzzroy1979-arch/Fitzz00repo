@@ -13,19 +13,19 @@ the two non-price data feeds predicts returns either.
 
 Five strategy families, long and short, eleven symbols, three timeframes,
 four cost levels, plus a swept volatility-regime entry gate in all four
-timeframe/direction corners — roughly 385 symbol/family significance sweeps
-over ~20,000 parameter configurations each. Five results ever cleared
+timeframe/direction corners — symbol/family significance sweeps over
+~20,000 parameter configurations each; the total is counted once below. Five results ever cleared
 p ≤ 0.05, and none of them survived a second look:
 
 | candidate | 10-17 | 10-20 | 10-26 | 11-03 | status |
 |---|---|---|---|---|---|
-| ZBCN mean_revert, 4h long | 0.021 | 0.018 | 0.016 | **0.008** | the one survivor; RC never clears (0.113 at best) |
+| ZBCN mean_revert, 4h long | 0.021 | 0.018 | 0.016 | **0.008** | the one survivor; RC never clears (0.096 at best, 0.188 with shorts); 24 round trips, 20 of them winners |
 | QNT mean_revert, 4h long | 0.031 | 0.046 | 0.019 | **0.022** | RC 0.100; 0.103 once a third is held out |
 | FLR confluence, 4h short | 0.033 | 0.030 | not re-run | 0.586 long | RC 0.154; holdout 82% decayed; absent on unseen symbols |
 | CC mean_revert, 4h short | 0.038 | 0.024 | **0.473** | excluded | holdout -0.000884; gone by 50 bps; see bug 10 |
 | ZBCN mean_revert, 1h short | 0.037 | not re-run | 0.018 gated | not re-run | costs: gone by 25 bps |
 
-Chance alone puts 5% of sweeps under p = 0.05 — about 23 of the ~450 run
+Chance alone puts 5% of sweeps under p = 0.05 — about 24 of the ~480 run
 here. Five hits is *well below* what noise predicts, not above it. Finding a
 handful of sub-5% results in a search this wide is the expected outcome of
 searching, and the only honest reading of the table.
@@ -819,7 +819,7 @@ with the volatility gate, threshold swept over 0/0.2/0.3/0.4/0.5/0.6 with
 0.0 — the ungated family — inside the grid so the gate has to beat the
 unfiltered version of itself. Thirty pairs reached (CC failed, see bug 10).
 
-| pair | cfgs | trades | win% | avgW | avgL | p(RC) | p(SPA) |
+| pair | cfgs | legs | win% | avgW | avgL | p(RC) | p(SPA) |
 |---|---|---|---|---|---|---|---|
 | ZBCN mean_revert, ungated | 72 | 48 | 83.3 | +12.1 | -3.9 | 0.096 | **0.008** |
 | ZBCN mean_revert, gated | 414 | 48 | 83.3 | +12.1 | -3.9 | 0.107 | **0.023** |
@@ -848,7 +848,8 @@ grid-widening idea against this number before weighing it against its own
 backtest.
 
 **The gate is now closed in five corners** — 4h long, 4h shorts, 1h long, 1h
-shorts, and this re-run of 4h long on fresh bars.
+shorts, and this re-run of 4h long on fresh bars. A sixth, 4h shorts on
+fresh bars, is in the next section.
 
 One process note, recorded because it is the kind of thing this document
 exists to not hide: the first attempt at this run crashed on its second
@@ -863,7 +864,7 @@ in isolation.
 
 ## Data bugs found along the way
 
-Ten, all the same shape: a read that was short, stale or simply another
+Eleven, all the same shape: a read that was short, stale or simply another
 symbol's, passing as valid. Each silently changed results rather than
 erroring.
 
@@ -944,9 +945,142 @@ erroring.
     such guard. Its CC row (-39.86%) may be CC or may be another symbol.
     Nothing checked it, so it is not evidence either way.
 
+11. **One row, two definitions of "trade".** Found 2026-11-03 while turning
+    the sweep's returns into dollar P&L. The `trades` column came from
+    `describe()` in `fitzz/sweep.py`, which counts position *transitions* --
+    an entry and its exit are two, a long-to-short flip is one -- while
+    `win%`, `avgW%` and `avgL%` in the same row came from `extract_trades`,
+    which counts *round trips*. Legs run about double trips, so every table
+    in this document read as though its win rate covered twice the trades it
+    actually did. `--min-trades` filters on legs too, so the power argument
+    for using 4h bars was quoted in legs as well.
+
+    Nothing computed from it was wrong: the p-values never used either count,
+    and the win rate and payoff were always correct for round trips. What was
+    wrong was the row, which invited a reading it could not support.
+
+    **The headline result is the clearest case: ZBCN mean_revert 4h long is
+    48 legs, which is 24 round trips, and its 83.3% win rate is 20 winners
+    out of 24.** "48 trades at 83.3%" and "24 trades at 83.3%" are very
+    different claims about how much evidence there is, and this document has
+    been making the first one about a result it describes as its only
+    survivor.
+
+    Fixed by splitting the column into `legs` and `trips` and printing both,
+    verified by running the sweep itself rather than the formatter -- the
+    distinction that bug 9 was shipped for missing.
+
 Guards now check the data rather than the chart's description of itself: bar
 count against confirmed depth, price against a live quote, bar spacing
 against the requested interval, and a lock against concurrent readers.
+
+## Shorts on the gated grid: a lower p that means less
+
+Run 2026-11-03, `--vol-gate --shorts` at 4h against the same cached bars the
+long-only gated run used (fetched 01:11-01:16), so the two runs are paired on
+identical data and the only difference is the short leg and the wider grid it
+brings. Thirty pairs reached; CC was excluded by the instrument guard, not by
+chance (bug 10, which fired again on this run's fetch).
+
+| pair | cfgs | legs | trips | win% | avgW% | avgL% | payoff | p(RC) | p(SPA) | block |
+|---|---|---|---|---|---|---|---|---|---|
+| ZBCN mean_revert, long-only | 414 | 48 | 24 | 83.3 | +12.1 | -3.9 | 3.10x | **0.107** | 0.023 | yes |
+| ZBCN mean_revert, +shorts | 594 | 114 | 61 | 82.0 | +7.4 | -6.5 | 1.14x | **0.188** | **0.005** | yes |
+| QNT mean_revert, long-only | 495 | 194 | — | 68.0 | +4.6 | -4.8 | 0.96x | 0.118 | 0.065 | yes |
+| QNT mean_revert, +shorts | 594 | 50 | 25 | 72.0 | +5.5 | -6.0 | 0.92x | 0.860 | 0.628 | yes |
+| FLR confluence, +shorts | 194 | 127 | — | 59.4 | +11.3 | -7.3 | 1.55x | 0.113 | **0.044** | NO |
+
+**The two tests moved in opposite directions, and the conservative one got
+worse.** ZBCN's p(SPA) fell to 0.005 — the lowest number in the entire
+search — while its p(RC) rose from 0.107 to 0.188. A result cannot become
+both stronger and weaker on the same data, so one of the two is reacting to
+something other than evidence: the grid went from 414 configs to 594, and
+RC, which pays for the whole search rather than for the best of it, charges
+more for the wider grid than SPA does. On every candidate where these two
+have split in this study, RC has been the one vindicated by the holdout. Read
+0.188, not 0.005.
+
+**The winner is a different strategy, not the long-only winner with shorts
+bolted on.** ZBCN's winning config now makes 114 trades where the long-only
+winner made 48, and while the win rate barely moves (83.3% to 82.0%) the
+average loser widens from -3.9% to -6.5%. The payoff ratio collapses from
+3.10x to 1.14x — the extra trades are close to breakeven and dilute what the
+long-only config found. A near-identical win rate over a very different trade
+population is a reminder that win% describes nothing about profitability.
+
+**QNT went the other way entirely**, 0.065 to 0.628, its winner changing from
+194 trades to 50. The same grid widening that lowered ZBCN's SPA destroyed
+QNT's. Two pairs, one wider grid, opposite outcomes: that is what sampling
+noise looks like when it is given more configs to choose from.
+
+**FLR confluence at 0.044 is disqualified by its own diagnostic.** The block
+column reads NO, meaning the winner holds positions longer than the bootstrap
+block, so its p-value is optimistically small. The one new sub-5% result in
+this run is the one result in it whose p-value cannot be taken at face value.
+
+Two of 30 pairs cleared 5% against ~1.5 expected by chance, and across all 30
+the pooled tape is 816W/765L of 1,581 trades = 51.6%, average winner +15.46%,
+average loser -5.66%. (That pooled payoff of 2.73x is a composition artifact
+and not a finding -- see the warning about pooling above.)
+
+**The gate is now closed in six corners**, the sixth being this re-run of 4h
+shorts on fresh bars. Shorts were the last structural variation left
+untested on fresh data, and they did what every previous variation did:
+widened the grid, moved the p-values around, and found nothing that RC would
+accept.
+
+## Equity curves say nothing about the p-values
+
+Run 2026-11-03. Every round trip of the winning config for both symbols and
+all five families, journalled out of the gated-shorts sweep and compounded
+two ways. Results are given as multiples of starting capital and percentages
+of stake -- the account they were sized against is deliberately not in this
+repo. Costs of 10 bps a round turn are already inside every trade.
+
+* **compounded** -- the whole account on one symbol, one strategy, one
+  position at a time, winnings reinvested.
+* **fixed** -- a flat stake every trade, profits withdrawn.
+
+| pair | trips | p(SPA) | compounded | fixed | worst DD | longest red |
+|---|---|---|---|---|---|---|
+| ZBCN mean_revert | 61 | **0.005** | 15.46x | +298% | 20.8% | 2 |
+| ZBCN ma_cross | 34 | 0.897 | 12.95x | **+470%** | 48.3% | 4 |
+| ZBCN follow_money | 57 | 0.884 | 3.14x | +240% | 68.7% | 4 |
+| ZBCN confluence | 10 | 0.812 | 3.04x | +232% | 30.2% | 4 |
+| ZBCN breakout | 89 | 1.000 | 0.69x | +111% | 85.7% | 8 |
+| QNT ma_cross | 57 | 0.715 | 6.86x | +388% | 44.1% | 4 |
+| QNT confluence | 12 | 0.907 | 5.16x | +274% | 23.7% | 2 |
+| QNT follow_money | 49 | 0.458 | 4.55x | +300% | 42.7% | 5 |
+| QNT breakout | 54 | 0.596 | 3.50x | +302% | 52.2% | 6 |
+| QNT mean_revert | 25 | 0.628 | 1.66x | +56% | 26.8% | 2 |
+
+**The best equity curve in the table belongs to a config the statistics call
+noise.** ZBCN ma_cross, p(SPA) 0.897, is the strongest performer by fixed
+stake (+470%) and the second strongest compounded (12.95x), against
+mean_revert's 0.005 and 15.46x. Spearman rank correlation between p(SPA) and
+return across these ten pairs is -0.32 compounded and -0.22 fixed, which at
+n = 10 is indistinguishable from none. A big number on an equity curve
+carries almost no information about whether the thing that produced it is
+real, which is the entire reason this document quotes p-values and holdouts
+instead.
+
+**Most of a compounded headline is reinvestment, not edge.** ZBCN
+mean_revert earns +298% of a flat stake across 61 trips and turns that into
+15.46x compounded. The gap is the arithmetic of reinvesting a high win rate
+in a favourable order, not a larger edge -- and order is the least
+repeatable property of a trade sequence.
+
+**Sizing can flip the sign.** ZBCN breakout, p = 1.000, *loses* 31%
+compounded while making +111% fixed-stake, with an 85.7% drawdown and eight
+consecutive losers. Same trades, same costs, opposite conclusions, decided
+entirely by whether winnings were reinvested.
+
+**What is not in any of these figures:** slippage and market impact. Every
+fill is assumed at the close whatever the size, and ZBCN trades near
+$0.0019 -- the thinnest book in the set, carrying the lowest p-value. Nor is
+any of this out of sample; each row is the best of a 178-to-20,123 config
+grid, measured on the data that chose it. Two rows rest on 10 and 12 round
+trips.
 
 ## What would actually change the answer
 
