@@ -970,6 +970,17 @@ erroring.
     verified by running the sweep itself rather than the formatter -- the
     distinction that bug 9 was shipped for missing.
 
+    **Scope, checked rather than assumed.** `fitzz trade --backtest` is not
+    affected. Its trade list takes one entry per *closed position* -- the
+    `trades.append(ret)` inside the exposure-change branch of
+    `fitzz/trading.py` -- and `win_rate_pct` is computed over that same list,
+    so its count and its win rate have always described the same round trips.
+    A long-to-short flip closes one position and opens another, which is one
+    entry, consistently. The defect was confined to `run_sweep_4h.py`, the
+    one place that took the count from `describe()` and the win rate from
+    `extract_trades()`. So every backtest figure in this document stands as
+    printed, and only the sweep tables were mislabelled.
+
 Guards now check the data rather than the chart's description of itself: bar
 count against confirmed depth, price against a live quote, bar spacing
 against the requested interval, and a lock against concurrent readers.
