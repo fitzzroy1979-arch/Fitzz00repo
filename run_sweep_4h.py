@@ -469,7 +469,7 @@ def main(argv=None):
 
     if args.cost_scan:
         levels = [float(x) for x in args.cost_scan.split(",") if x.strip()]
-        ok, failed = 0, []
+        fetched_ok, failed = 0, []
         for sym in symbols:
             try:
                 path, n = fetch(sym, args.interval, args.bars, args.cache)
@@ -477,7 +477,7 @@ def main(argv=None):
                 print(f"{sym}: fetch failed: {str(e)[:60]}")
                 failed.append(sym)
                 continue
-            ok += 1
+            fetched_ok += 1
             for fam in families:
                 print(f"\n{sym}  {fam}{'  (shorts)' if args.shorts else ''}  "
                       f"{args.interval}  {n} bars")
@@ -502,14 +502,14 @@ def main(argv=None):
                 else:
                     print("\n  survives every cost level tested -- worth raising the "
                           "range.")
-        return _exit_status(ok, failed, symbols)
+        return _exit_status(fetched_ok, failed, symbols)
 
     print(f"{'symbol':<20}{'family':<14}{'bars':>6}{'cfgs':>7}{'trades':>7}"
           f"{'hit%':>7}{'win%':>7}{'avgW%':>7}{'avgL%':>7}"
           f"{'p(RC)':>8}{'p(SPA)':>8}  block ok")
     rows = []
     journals, by_family = [], {}
-    ok, failed = 0, []
+    fetched_ok, failed = 0, []
     for sym in symbols:
         try:
             path, n = fetch(sym, args.interval, args.bars, args.cache)
@@ -517,7 +517,7 @@ def main(argv=None):
             print(f"{sym:<20}{'-':<14}{'':>6}  fetch failed: {str(e)[:40]}")
             failed.append(sym)
             continue
-        ok += 1
+        fetched_ok += 1
         for fam in families:
             res = sweep(path, fam, args.cost_bps, args.block, args.seed,
                         shorts=args.shorts, vol_gate=args.vol_gate)
@@ -635,7 +635,7 @@ def main(argv=None):
             print("  symbol, not for trying several symbols. Across "
                   f"{len(live)} sweeps, expect")
             print(f"  about {0.05 * len(live):.1f} to clear 5% by chance alone.")
-    return _exit_status(ok, failed, symbols)
+    return _exit_status(fetched_ok, failed, symbols)
 
 
 if __name__ == "__main__":
